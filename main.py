@@ -206,6 +206,12 @@ async def handle_message(bot_instance: Robot, message: Message):
 
 
 if __name__ == "__main__":
-    print("🤖 RP Group Manager is starting...")
-    print("✅ ربات آماده دریافت پیام‌های روبیکا است.")
-    bot.run()
+    print("🤖 RP Group Manager is starting...", flush=True)
+
+    print("🔌 در حال اتصال به روبیکا...", flush=True)
+
+    try:
+        bot.run()
+    except Exception as exc:
+        print(f"❌ خطای اجرای ربات: {exc}", flush=True)
+        raise
