@@ -7,211 +7,472 @@ from typing import Any
 from rubka.asynco import Robot
 from rubka.context import Message
 
-# =========================
+
+# =========================================================
 # تنظیمات
-# =========================
-TOKEN = os.getenv("RUBIKA_TOKEN", "CGCEHD0GJVKFRAZSGVZUKXXNFZZWIDPXTAZGBFFDJQNKUIHKRYISDXOMWXWGJBSL").strip()
+# =========================================================
+
+TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
+
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", "data"))
+
 ACTIVE_FILE = DATA_DIR / "active_groups.json"
 MUTED_FILE = DATA_DIR / "muted_users.json"
 CACHE_FILE = DATA_DIR / "message_cache.json"
+
 MAX_CACHE = 5000
 
-if not TOKEN or TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
+START_DELAY = 30
+
+
+# =========================================================
+# بررسی توکن
+# =========================================================
+
+if not TOKEN:
     raise RuntimeError(
-        "توکن ربات تنظیم نشده است. متغیر RUBIKA_TOKEN را تنظیم کنید "
-        "یا مقدار TOKEN در main.py را قرار دهید."
+        "RUBIKA_TOKEN تنظیم نشده است. "
+        "آن را در متغیر محیطی Runflare قرار بده."
     )
+
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# =========================================================
+# ابزارهای فایل JSON
+# =========================================================
 
 def load_json(path: Path, default: Any) -> Any:
     try:
         if not path.exists():
             return default
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+
+    except Exception as exc:
+        print(f"[JSON LOAD ERROR] {path}: {exc}", flush=True)
         return default
 
 
 def save_json(path: Path, value: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(value, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    try:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+
+        with tmp.open("w", encoding="utf-8") as file:
+            json.dump(
+                value,
+                file,
+                ensure_ascii=False,
+                indent=2
+            )
+
+        tmp.replace(path)
+
+    except Exception as exc:
+        print(f"[JSON SAVE ERROR] {path}: {exc}", flush=True)
 
 
-# فعال بودن ربات در هر گروه
-active_groups: set[str] = set(load_json(ACTIVE_FILE, []))
+# =========================================================
+# وضعیت ربات
+# =========================================================
 
-# کاربران ساکت‌شده: {group_guid: [user_guid, ...]}
+active_groups: set[str] = set(
+    str(x)
+    for x in load_json(ACTIVE_FILE, [])
+)
+
+
 muted_users: dict[str, set[str]] = {
-    group: set(users)
+    str(group): set(str(user) for user in users)
     for group, users in load_json(MUTED_FILE, {}).items()
 }
 
-# کش پیام‌ها برای فهمیدن اینکه پیام ریپلای‌شده متعلق به کدام کاربر بوده است.
-# این فایل باعث می‌شود بعد از ری‌استارت هم پیام‌های دیده‌شده قابل ریپلای باشند.
+
 message_cache: dict[str, dict[str, str]] = {
-    str(group): {str(mid): str(uid) for mid, uid in messages.items()}
+    str(group): {
+        str(message_id): str(user_id)
+        for message_id, user_id in messages.items()
+    }
     for group, messages in load_json(CACHE_FILE, {}).items()
 }
+
+
+# =========================================================
+# ساخت ربات
+# =========================================================
 
 bot = Robot(TOKEN)
 
 
-def contains_identifier(value: Any, wanted: str) -> bool:
-    """در پاسخ‌های API به‌صورت بازگشتی دنبال شناسه می‌گردد."""
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return value == wanted
-    if isinstance(value, dict):
-        return any(contains_identifier(v, wanted) for v in value.values())
-    if isinstance(value, (list, tuple, set)):
-        return any(contains_identifier(v, wanted) for v in value)
-    return False
-
-
-async def is_group_admin(chat_id: str, user_id: str) -> bool:
-    """چون خروجی get_chat_admins مخصوص فهرست مدیران است، وجود شناسه کاربر کافی است."""
-    try:
-        admins = await bot.get_chat_admins(chat_id)
-        return contains_identifier(admins, user_id)
-    except Exception as exc:
-        print(f"[ADMIN CHECK ERROR] {exc}")
-        return False
-
-
-def remember_message(message: Message) -> None:
-    group = str(message.chat_id)
-    mid = str(message.message_id)
-    uid = str(message.sender_id)
-    group_cache = message_cache.setdefault(group, {})
-    group_cache[mid] = uid
-
-    # محدود کردن اندازه کش هر گروه
-    if len(group_cache) > MAX_CACHE:
-        extra = len(group_cache) - MAX_CACHE
-        for old_mid in list(group_cache.keys())[:extra]:
-            group_cache.pop(old_mid, None)
-
-    save_json(
-        CACHE_FILE,
-        {g: dict(messages) for g, messages in message_cache.items()},
-    )
-
-
-def save_state() -> None:
-    save_json(ACTIVE_FILE, sorted(active_groups))
-    save_json(
-        MUTED_FILE,
-        {g: sorted(users) for g, users in muted_users.items()},
-    )
-
+# =========================================================
+# توابع کمکی
+# =========================================================
 
 def normalize_text(text: str | None) -> str:
     if not text:
         return ""
+
     return " ".join(text.strip().split())
 
 
-@bot.on_message()
-async def handle_message(bot_instance: Robot, message: Message):
-    if not message.is_group:
-        return
+def contains_identifier(value: Any, wanted: str) -> bool:
 
-    group_id = str(message.chat_id)
-    user_id = str(message.sender_id)
-    text = normalize_text(message.text)
+    if value is None:
+        return False
 
-    # هر پیام دیده‌شده را قبل از اجرای دستورات ذخیره می‌کنیم تا ریپلای قابل شناسایی باشد.
+    if isinstance(value, str):
+        return value == wanted
+
+    if isinstance(value, dict):
+        return any(
+            contains_identifier(v, wanted)
+            for v in value.values()
+        )
+
+    if isinstance(value, (list, tuple, set)):
+        return any(
+            contains_identifier(v, wanted)
+            for v in value
+        )
+
+    return False
+
+
+async def is_group_admin(
+    chat_id: str,
+    user_id: str
+) -> bool:
+
     try:
-        remember_message(message)
+        admins = await bot.get_chat_admins(chat_id)
+
+        return contains_identifier(
+            admins,
+            user_id
+        )
+
     except Exception as exc:
-        print(f"[CACHE ERROR] {exc}")
+        print(
+            f"[ADMIN CHECK ERROR] {exc}",
+            flush=True
+        )
 
-    # اول از همه، پیام افراد ساکت حذف می‌شود.
-    # حتی اگر متن، عکس، استیکر، فایل و ... باشد، message handler آن را دریافت می‌کند.
-    if group_id in active_groups and user_id in muted_users.get(group_id, set()):
-        try:
-            await bot_instance.delete_message(group_id, str(message.message_id))
-        except Exception as exc:
-            print(f"[DELETE MUTED MESSAGE ERROR] {exc}")
-        return
+        return False
 
-    # فعال‌سازی فقط توسط مدیر گروه
-    if text == "فعال":
-        if not await is_group_admin(group_id, user_id):
-            await message.reply("⛔ فقط مدیر گروه می‌تواند ربات را فعال کند.")
+
+def remember_message(message: Message) -> None:
+
+    try:
+        group_id = str(message.chat_id)
+        message_id = str(message.message_id)
+        sender_id = str(message.sender_id)
+
+        group_cache = message_cache.setdefault(
+            group_id,
+            {}
+        )
+
+        group_cache[message_id] = sender_id
+
+        # محدود کردن کش
+        if len(group_cache) > MAX_CACHE:
+
+            extra = len(group_cache) - MAX_CACHE
+
+            old_ids = list(group_cache.keys())[:extra]
+
+            for old_id in old_ids:
+                group_cache.pop(old_id, None)
+
+        save_json(
+            CACHE_FILE,
+            {
+                group: dict(messages)
+                for group, messages in message_cache.items()
+            }
+        )
+
+    except Exception as exc:
+        print(
+            f"[CACHE ERROR] {exc}",
+            flush=True
+        )
+
+
+def save_state() -> None:
+
+    save_json(
+        ACTIVE_FILE,
+        sorted(active_groups)
+    )
+
+    save_json(
+        MUTED_FILE,
+        {
+            group: sorted(users)
+            for group, users in muted_users.items()
+        }
+    )
+
+
+# =========================================================
+# دریافت پیام
+# =========================================================
+
+@bot.on_message()
+async def handle_message(
+    bot_instance: Robot,
+    message: Message
+):
+
+    try:
+
+        print(
+            f"[MESSAGE] chat={getattr(message, 'chat_id', '?')} "
+            f"text={getattr(message, 'text', '')}",
+            flush=True
+        )
+
+        # فقط گروه
+        if not getattr(message, "is_group", False):
             return
 
-        active_groups.add(group_id)
-        muted_users.setdefault(group_id, set())
-        save_state()
-        await message.reply("✅ ربات در گروه فعال شد.")
-        return
+        group_id = str(message.chat_id)
+        user_id = str(message.sender_id)
 
-    # تا قبل از فعال‌سازی هیچ دستور مدیریتی اجرا نمی‌شود.
-    if group_id not in active_groups:
-        return
+        text = normalize_text(
+            getattr(message, "text", "")
+        )
 
-    # دستور سکوت فقط برای مدیرها و فقط به‌صورت ریپلای است.
-    if text == "سکوت":
-        if not await is_group_admin(group_id, user_id):
-            return
+        # ذخیره پیام
+        remember_message(message)
 
-        reply_id = getattr(message, "reply_to_message_id", None)
-        if not reply_id:
-            await message.reply("⚠️ روی پیام کاربر ریپلای کن و بنویس: سکوت")
-            return
+        # =================================================
+        # فعال
+        # =================================================
 
-        target_id = message_cache.get(group_id, {}).get(str(reply_id))
-        if not target_id:
-            await message.reply(
-                "⚠️ کاربر این پیام در حافظه ربات پیدا نشد. روی پیامی ریپلای کن که ربات قبلاً دیده باشد."
+        if text == "فعال":
+
+            print(
+                f"[ACTIVATE] group={group_id} user={user_id}",
+                flush=True
             )
-            return
 
-        # مدیران را نمی‌شود با این دستور ساکت کرد.
-        if await is_group_admin(group_id, target_id):
-            await message.reply("⛔ مدیران گروه قابل سکوت نیستند.")
-            return
+            # برای اینکه حتی اگر قبلاً فعال بوده
+            # دوباره دستور فعال جواب بدهد
+            active_groups.add(group_id)
 
-        try:
-            # در کتابخانه Rubka، restrict_chat_member برای محدود کردن عضو وجود دارد.
-            # until=0 برای محدودیت بدون زمان پایان استفاده می‌شود.
-            result = await bot_instance.restrict_chat_member(
+            muted_users.setdefault(
                 group_id,
-                target_id,
-                until=0,
+                set()
             )
-        except Exception as exc:
-            print(f"[RESTRICT ERROR] {exc}")
+
+            save_state()
+
+            try:
+                await message.reply(
+                    "✅ ربات در این گروه فعال شد."
+                )
+
+            except Exception as exc:
+                print(
+                    f"[ACTIVATE REPLY ERROR] {exc}",
+                    flush=True
+                )
+
+            return
+
+        # =================================================
+        # پیام افراد ساکت
+        # =================================================
+
+        if (
+            group_id in active_groups
+            and user_id in muted_users.get(
+                group_id,
+                set()
+            )
+        ):
+
+            try:
+
+                await bot_instance.delete_message(
+                    group_id,
+                    str(message.message_id)
+                )
+
+            except Exception as exc:
+
+                print(
+                    f"[DELETE MUTED ERROR] {exc}",
+                    flush=True
+                )
+
+            return
+
+        # =================================================
+        # اگر گروه فعال نیست
+        # =================================================
+
+        if group_id not in active_groups:
+            return
+
+        # =================================================
+        # سکوت
+        # =================================================
+
+        if text == "سکوت":
+
+            if not await is_group_admin(
+                group_id,
+                user_id
+            ):
+                return
+
+            reply_id = getattr(
+                message,
+                "reply_to_message_id",
+                None
+            )
+
+            if not reply_id:
+
+                await message.reply(
+                    "⚠️ روی پیام کاربر ریپلای کن و بنویس: سکوت"
+                )
+
+                return
+
+            target_id = message_cache.get(
+                group_id,
+                {}
+            ).get(
+                str(reply_id)
+            )
+
+            if not target_id:
+
+                await message.reply(
+                    "⚠️ پیام موردنظر در حافظه ربات پیدا نشد."
+                )
+
+                return
+
+            # مدیر را نمی‌شود ساکت کرد
+            if await is_group_admin(
+                group_id,
+                target_id
+            ):
+
+                await message.reply(
+                    "⛔ مدیر گروه قابل سکوت نیست."
+                )
+
+                return
+
+            try:
+
+                await bot_instance.restrict_chat_member(
+                    group_id,
+                    target_id,
+                    until=0
+                )
+
+            except Exception as exc:
+
+                print(
+                    f"[RESTRICT ERROR] {exc}",
+                    flush=True
+                )
+
+                await message.reply(
+                    "❌ سکوت انجام نشد. "
+                    "دسترسی مدیریت اعضای ربات را بررسی کن."
+                )
+
+                return
+
+            muted_users.setdefault(
+                group_id,
+                set()
+            ).add(target_id)
+
+            save_state()
+
             await message.reply(
-                "❌ سکوت انجام نشد. دسترسی‌های ادمینی ربات را بررسی کن؛ "
-                "ربات باید امکان مدیریت/محدودکردن اعضا را داشته باشد."
+                "✅ کاربر سکوت شد."
             )
-            return
 
-        if isinstance(result, dict) and str(result.get("status", "OK")) not in {"OK", ""}:
-            await message.reply("❌ روبیکا درخواست سکوت را نپذیرفت. دسترسی‌های ربات را بررسی کن.")
-            return
+    except Exception as exc:
 
-        muted_users.setdefault(group_id, set()).add(target_id)
-        save_state()
-        await message.reply("✅ کاربر سکوت شد.")
+        print(
+            f"[MESSAGE HANDLER ERROR] {exc}",
+            flush=True
+        )
 
+
+# =========================================================
+# اجرای ربات با تأخیر و تلاش مجدد
+# =========================================================
+
+async def start_bot():
+
+    print(
+        "🤖 RP Group Manager is starting...",
+        flush=True
+    )
+
+    print(
+        f"⏳ ربات تا {START_DELAY} ثانیه دیگر شروع می‌شود...",
+        flush=True
+    )
+
+    await asyncio.sleep(START_DELAY)
+
+    while True:
+
+        try:
+
+            print(
+                "🚀 در حال اتصال به روبیکا...",
+                flush=True
+            )
+
+            await bot.run()
+
+            print(
+                "⚠️ اتصال ربات متوقف شد؛ "
+                "۱۰ ثانیه بعد دوباره تلاش می‌کنم.",
+                flush=True
+            )
+
+        except Exception as exc:
+
+            print(
+                f"❌ خطای اجرای ربات: {exc}",
+                flush=True
+            )
+
+        await asyncio.sleep(10)
+
+
+# =========================================================
+# شروع
+# =========================================================
 
 if __name__ == "__main__":
-    print("🤖 RP Group Manager is starting...", flush=True)
-
-    print("🔌 در حال اتصال به روبیکا...", flush=True)
 
     try:
-        asyncio.run(bot.run())
-    except Exception as exc:
-        print(f"❌ خطای اجرای ربات: {exc}", flush=True)
-        raise
+
+        asyncio.run(
+            start_bot()
+        )
+
+    except KeyboardInterrupt:
+
+        print(
+            "🛑 ربات متوقف شد.",
+            flush=True
+    )
