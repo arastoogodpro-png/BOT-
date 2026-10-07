@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from rubka import Robot, Message
+from rubka import Robot
+from rubka.context import Message
 
 # =========================
 # تنظیمات
