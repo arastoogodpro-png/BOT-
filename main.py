@@ -128,13 +128,7 @@ def save_message_cache() -> None:
 # ساخت ربات
 # =========================================================
 
-bot = Robot(
-    token=TOKEN,
-    api_endpoint="botapi",
-    timeout=15,
-    retries=5,
-    retry_delay=1.0,
-)
+bot = Robot(TOKEN)
 
 
 # =========================================================
