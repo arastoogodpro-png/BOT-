@@ -10,7 +10,7 @@ from rubka.context import Message
 # =========================
 # تنظیمات
 # =========================
-TOKEN = os.getenv("RUBIKA_TOKEN", "PASTE_YOUR_BOT_TOKEN_HERE").strip()
+TOKEN = os.getenv("RUBIKA_TOKEN", "CGCEHD0GJVKFRAZSGVZUKXXNFZZWIDPXTAZGBFFDJQNKUIHKRYISDXOMWXWGJBSL").strip()
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", "data"))
 ACTIVE_FILE = DATA_DIR / "active_groups.json"
 MUTED_FILE = DATA_DIR / "muted_users.json"
