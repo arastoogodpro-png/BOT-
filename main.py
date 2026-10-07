@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from rubka import Robot
+from rubka.asynco import Robot
 from rubka.context import Message
 
 # =========================
@@ -211,7 +211,7 @@ if __name__ == "__main__":
     print("🔌 در حال اتصال به روبیکا...", flush=True)
 
     try:
-        bot.run()
+        asyncio.run(bot.run())
     except Exception as exc:
         print(f"❌ خطای اجرای ربات: {exc}", flush=True)
         raise
