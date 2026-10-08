@@ -31,8 +31,31 @@ def clean_message(text: str) -> str:
     return text
 
 
+# ================== تشخیص گروه بودن چت ==================
+def is_group_chat(chat_id: str) -> bool:
+    """
+    تشخیص اینکه آیا چت مورد نظر گروه است یا پیوی.
+    در روبیکا، chat_id گروه‌ها معمولاً با حرف 'g' شروع میشه
+    و chat_id کاربران با حرف 'u' یا 'b' (برای ربات‌ها).
+    """
+    if not chat_id:
+        return False
+
+    chat_id = str(chat_id).strip().lower()
+
+    # گروه‌ها معمولاً با 'g' شروع میشن
+    if chat_id.startswith("g"):
+        return True
+
+    # پیوی‌ها معمولاً با 'u' یا 'b' شروع میشن
+    if chat_id.startswith("u") or chat_id.startswith("b"):
+        return False
+
+    # پیش‌فرض: اگه مطمئن نیستیم، فرض می‌کنیم گروه نیست
+    return False
+
+
 # ================== متغیر وضعیت ربات ==================
-# برای اینکه بفهمیم ربات قبلاً فعال شده یا نه
 bot_was_activated = False
 
 
@@ -44,23 +67,27 @@ async def handle_message(bot: Robot, message: Message):
     try:
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
+        chat_id = str(message.chat_id) if message.chat_id else ""
 
         print(
-            f"📩 MESSAGE | chat={message.chat_id} | "
+            f"📩 MESSAGE | chat={chat_id} | "
             f"raw={raw_text!r} | clean={clean_text!r}",
             flush=True
         )
+
+        # ============ فقط توی گروه کار کن ============
+        if not is_group_chat(chat_id):
+            print("⏭️ SKIPPED (not a group)", flush=True)
+            return
 
         # ============ دستور «فعال» ============
         if clean_text == "فعال":
             print("✅ ACTIVATE COMMAND", flush=True)
 
             if not bot_was_activated:
-                # اولین بار
                 reply_text = "✅ ربات فعال شد."
                 bot_was_activated = True
             else:
-                # بارهای بعدی
                 reply_text = "✅ ربات فعال است."
 
             result = await bot.send_message(
@@ -76,65 +103,24 @@ async def handle_message(bot: Robot, message: Message):
         if clean_text == "مقام":
             print("✅ RANK COMMAND", flush=True)
 
-            # تعیین نقش کاربر
+            # تشخیص نقش کاربر
             role = "عضو"  # پیش‌فرض
 
             try:
-                # دریافت اطلاعات چت برای تشخیص نقش
-                # (بر اساس API روبیکا، نقش کاربر در فیلد access_list یا join_type مشخص میشه)
-                sender_id = str(message.sender_id)
-                chat_id = str(message.chat_id)
-
-                # اگه کاربر همون مالک گروه باشه
-                # (چون در روبیکا معمولاً bot_id و owner_id متفاوته، اینجا یه چک ساده می‌کنیم)
-                # در روبیکا نقش‌ها معمولاً از طریق فیلدهای خاصی از API میاد
-                # برای سادگی، اگه کاربر ادمین باشه، توی access_list مشخص میشه
-                # ولی چون rubka این اطلاعات رو مستقیم نمی‌ده، فعلاً بر اساس فرض می‌ذاریم:
-                
-                # اگه پیام از طرف مالک گروه باشه
-                # (این بخش بسته به API روبیکا می‌تونه تغییر کنه)
-                # برای سادگی، اگه کاربر پیام داده، نقشش رو از یه فیلد ساده می‌خونیم
-                # یا اینکه از پکیج rubka بخوایم اطلاعات بفرسته
-                
-                # ساده‌ترین راه: اگه کاربر توی access_list با نقش Admin باشه
-                # ولی این اطلاعات معمولاً توی پیام نیست، توی آبجکت چت هست
-                
-                # فعلاً بر اساس فرض می‌ذاریم:
-                # اگه کاربر خودش پیام داده، احتمالاً یا مالک یا ادمین یا عضوه
-                # بهترین راه: از بات بخوایم اطلاعات چت رو بگیره
-                
-                # === راه ساده و کارآمد ===
-                # توی rubka، معمولاً message.sender_id و chat_id داریم
-                # ولی برای تشخیص نقش، باید از API استفاده کنیم
-                # چون فعلاً به اون دسترسی نداریم، بر اساس یه منطق ساده:
-                # - اگه توی access_list مالک بود → مالک
-                # - اگه توی access_list ادمین بود → ادمین
-                # - در غیر این صورت → عضو
-                
-                # چون access_list توی پیام نیست، از یه راه دیگه استفاده می‌کنیم:
-                # در روبیکا، اگه کاربر ادمین باشه، توی context پیام مشخص میشه
-                # ولی rubka این رو ساده نمی‌کنه
-                
-                # === راه‌حل نهایی: از خود rubka می‌پرسیم ===
-                # متد get_chat_info یا مشابهش
-                
-                # فعلاً یه منطق ساده:
-                role = "عضو"  # پیش‌فرض
-
-                # اگه کاربر توی گروه مالک باشه (بر اساس بررسی ساده)
-                # اینجا می‌تونیم از API استفاده کنیم
-                # ولی چون نمی‌دونیم rubka چه متدی داره، فعلاً ساده می‌ذاریم
-                
-                # === بهتر: با استفاده از message متوجه بشیم ===
-                # اگه message از نوع خاصی باشه یا فیلد خاصی داشته باشه
-                if hasattr(message, 'sender_role'):
-                    role = message.sender_role
-                elif hasattr(message, 'role'):
-                    role = message.role
-                elif hasattr(message, 'access_list'):
-                    # اگه access_list داشت
-                    if isinstance(message.access_list, list):
-                        if 'Admin' in message.access_list:
+                # تلاش برای تشخیص نقش از فیلدهای مختلف پیام
+                if hasattr(message, "sender_role") and message.sender_role:
+                    role = str(message.sender_role)
+                elif hasattr(message, "role") and message.role:
+                    role = str(message.role)
+                elif hasattr(message, "access_list") and message.access_list:
+                    access = message.access_list
+                    if isinstance(access, list):
+                        if "Admin" in access or "Owner" in access:
+                            role = "ادمین"
+                        else:
+                            role = "عضو"
+                    elif isinstance(access, str):
+                        if "Admin" in access or "Owner" in access:
                             role = "ادمین"
                         else:
                             role = "عضو"
