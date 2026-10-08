@@ -9,32 +9,26 @@ if not TOKEN:
 
 bot = Robot(token=TOKEN)
 
+# هندلر بدون هیچ شرطی - هر پیامی که برسه رو لاگ می‌کنه
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
+    print(f"📩 RAW MESSAGE RECEIVED: {message}", flush=True)
+    print(f"📩 TEXT: {message.text}", flush=True)
+    print(f"📩 CHAT_ID: {message.chat_id}", flush=True)
+
+    # هر پیامی که رسید، جواب بده
     try:
-        text = (message.text or "").strip()
-        print(f"📩 MESSAGE | chat={message.chat_id} | text={text!r}", flush=True)
-
-        # بررسی دستور فعال‌سازی
-        if text not in ("فعال", "فاعل", "/start"):
-            return
-
-        print("✅ ACTIVATE COMMAND", flush=True)
-
-        # ارسال پیام به گروه
-        result = await bot.send_message(
+        await bot.send_message(
             chat_id=message.chat_id,
-            text="✅ ربات فعال است و پیام شما را دریافت کرد.",
-            reply_to_message_id=message.message_id,
-            disable_notification=False
+            text="✅ تست: پیام شما دریافت شد.",
+            reply_to_message_id=message.message_id
         )
-        print(f"📤 SENT | {result}", flush=True)
-
+        print("📤 SENT SUCCESSFULLY", flush=True)
     except Exception as e:
-        print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
+        print(f"❌ SEND ERROR: {e}", flush=True)
 
 async def main():
-    print("🤖 RP GROUP MANAGER STARTING...", flush=True)
+    print("🤖 TEST BOT STARTING...", flush=True)
     try:
         await bot.run()
     except Exception as e:
