@@ -59,6 +59,9 @@ bot_is_active = True
 # لیست سکوت: {chat_id: {user_id: end_timestamp}}
 mute_list = {}
 
+# فیلتر پیام‌های تکراری (برای جلوگیری از جواب دوباره)
+processed_messages = {}
+
 
 # ================== هندلر پیام‌ها ==================
 @bot.on_message()
@@ -66,6 +69,22 @@ async def handle_message(bot: Robot, message: Message):
     global bot_is_active
 
     try:
+        # ================== فیلتر پیام‌های تکراری ==================
+        msg_id = str(message.message_id)
+        current_time = time.time()
+        
+        # پاکسازی پیام‌های قدیمی از کش (بیشتر از 60 ثانیه)
+        keys_to_delete = [k for k, v in processed_messages.items() if current_time - v > 60]
+        for k in keys_to_delete:
+            del processed_messages[k]
+
+        # اگه پیام قبلاً پردازش شده، نادیده بگیر
+        if msg_id in processed_messages:
+            print(f"⏭️ DUPLICATE MESSAGE IGNORED: {msg_id}", flush=True)
+            return
+        processed_messages[msg_id] = current_time
+
+        # ================== دریافت اطلاعات پیام ==================
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
         chat_id = str(message.chat_id) if message.chat_id else ""
@@ -76,42 +95,36 @@ async def handle_message(bot: Robot, message: Message):
         if not is_group_chat(chat_id):
             return
 
-        # ============================================================
-        # بررسی سکوت کاربر (قبل از هر پردازش دیگه‌ای)
-        # ============================================================
+        # ================== بررسی سکوت ==================
         now = time.time()
         chat_mutes = mute_list.get(chat_id, {})
-        
+
         if sender_id in chat_mutes:
             end_time = chat_mutes[sender_id]
             if now < end_time:
-                # کاربر در حال سکوت هست - پیامش رو پاک کن
-                print(f"🔇 MUTED USER - DELETING MESSAGE", flush=True)
+                print(f"🔇 MUTED USER DETECTED - DELETING MESSAGE", flush=True)
                 try:
+                    # حذف پیام کاربر سکوت شده
                     await bot.delete_message(
-                        chat_id=message.chat_id,
+                        chat_id=chat_id,
                         message_id=message.message_id
                     )
-                    print(f"🗑️ MESSAGE DELETED", flush=True)
+                    print(f"🗑️ MESSAGE DELETED SUCCESSFULLY", flush=True)
                 except Exception as e:
-                    print(f"⚠️ DELETE ERROR: {e}", flush=True)
+                    print(f"❌ DELETE FAILED: {type(e).__name__}: {e}", flush=True)
                 return
             else:
-                # زمان سکوت تمام شده - از لیست حذف کن
+                # زمان سکوت تمام شده
                 del chat_mutes[sender_id]
                 print(f"🔊 MUTE EXPIRED for {sender_id}", flush=True)
 
-        # ============================================================
-        # تشخیص نقش فرستنده
-        # ============================================================
+        # ================== تشخیص نقش فرستنده ==================
         role = await get_user_role(chat_id, sender_id)
         is_owner = (role == "مالک")
 
         print(f"👤 SENDER ROLE: {role} | is_owner={is_owner}", flush=True)
 
-        # ============================================================
-        # بخش اول: دستورات مدیریتی (فقط مالک)
-        # ============================================================
+        # ================== دستورات مدیریتی (فقط مالک) ==================
 
         # --- دستور «فعال» ---
         if clean_text in ("فعال", "فاعل"):
@@ -123,6 +136,7 @@ async def handle_message(bot: Robot, message: Message):
             else:
                 bot_is_active = True
                 reply_text = "✅ ربات فعال شد."
+            
             await bot.send_message(
                 chat_id=message.chat_id,
                 text=reply_text,
@@ -142,6 +156,7 @@ async def handle_message(bot: Robot, message: Message):
             else:
                 bot_is_active = False
                 reply_text = "🛑 ربات غیرفعال شد."
+            
             await bot.send_message(
                 chat_id=message.chat_id,
                 text=reply_text,
@@ -152,7 +167,6 @@ async def handle_message(bot: Robot, message: Message):
             return
 
         # --- دستور «سکوت [عدد]» ---
-        # الگو: سکوت 1 یا سکوت 5 یا سکوت 10
         mute_match = re.match(r"^سکوت\s+(\d+)$", clean_text)
         if mute_match:
             if not is_owner:
@@ -161,42 +175,23 @@ async def handle_message(bot: Robot, message: Message):
 
             minutes = int(mute_match.group(1))
             if minutes <= 0:
-                await bot.send_message(
-                    chat_id=message.chat_id,
-                    text="⚠️ عدد باید بزرگتر از صفر باشد.",
-                    reply_to_message_id=message.message_id
-                )
+                await bot.send_message(chat_id=message.chat_id, text="⚠️ عدد باید بزرگتر از صفر باشد.", reply_to_message_id=message.message_id)
                 return
 
-            # پیدا کردن کاربری که بهش سکوت داده میشه
-            # توی گروه، اگه پیام ریپلای باشه، کاربر ریپلای شده سکوت میشه
-            # وگرنه کاربری که پیام داده
             target_user_id = None
-
+            
             # چک کردن اینکه پیام ریپلای هست یا نه
-            reply_to = None
             if hasattr(message, 'reply_to_message_id') and message.reply_to_message_id:
-                reply_to = message.reply_to_message_id
-            elif hasattr(message, 'reply_to_message') and message.reply_to_message:
-                reply_to = message.reply_to_message.message_id
-
-            if reply_to:
-                # دریافت پیام ریپلای شده
                 try:
-                    replied_msg = await bot.get_message(
-                        chat_id=message.chat_id,
-                        message_id=reply_to
-                    )
+                    replied_msg = await bot.get_message(chat_id=message.chat_id, message_id=message.reply_to_message_id)
                     if replied_msg:
                         target_user_id = str(replied_msg.sender_id)
                 except Exception as e:
                     print(f"⚠️ GET REPLIED MESSAGE ERROR: {e}", flush=True)
 
-            # اگه ریپلای نبود، از کاربری که پیام داده استفاده کن
             if not target_user_id:
-                target_user_id = sender_id
+                target_user_id = sender_id # اگه ریپلای نبود، خود فرستنده سکوت میشه
 
-            # اضافه کردن به لیست سکوت
             end_time = time.time() + (minutes * 60)
             if chat_id not in mute_list:
                 mute_list[chat_id] = {}
@@ -214,15 +209,11 @@ async def handle_message(bot: Robot, message: Message):
             print(f"📤 SENT: {reply_text}", flush=True)
             return
 
-        # ============================================================
-        # بخش دوم: دستورات عمومی (فقط وقتی ربات فعال است)
-        # ============================================================
-
+        # ================== دستورات عمومی (وقتی ربات فعاله) ==================
         if not bot_is_active:
             print("⏸️ BOT INACTIVE - IGNORED", flush=True)
             return
 
-        # --- دستور «مقام» ---
         if clean_text == "مقام":
             print("✅ RANK COMMAND", flush=True)
             reply_text = f"👤 مقام کاربر: {role}"
