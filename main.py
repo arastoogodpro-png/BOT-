@@ -1,93 +1,42 @@
 import os
 import asyncio
-import traceback
-
 from rubka import Robot, Message
 
-
+# تنظیمات اولیه
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("RUBIKA_TOKEN تنظیم نشده است.")
+    raise RuntimeError("❌ RUBIKA_TOKEN تنظیم نشده است.")
 
+# ساخت ربات
+bot = Robot(token=TOKEN)
 
-bot = Robot(
-    token=TOKEN,
-    retries=10,
-    retry_delay=2,
-    timeout=30,
-    safeSendMode=True,
-    max_cache_size=2000,
-    max_msg_age=60,
-)
-
-
-@bot.on_message()
-async def handle_message(bot: Robot, message: Message):
+# دستور فعال‌سازی - برای گروه و چت شخصی
+@bot.on_message(commands=["start", "فعال", "فاعل"])
+async def handle_activation(bot: Robot, message: Message):
     try:
         text = (message.text or "").strip()
-
-        print(
-            f"📩 MESSAGE | chat={message.chat_id} "
-            f"| sender={message.sender_id} | text={text!r}",
-            flush=True
-        )
-
-        if text not in ("فعال", "فاعل"):
-            return
-
+        print(f"📩 MESSAGE | chat={message.chat_id} | text={text!r}", flush=True)
         print("✅ ACTIVATE COMMAND", flush=True)
 
-        await asyncio.sleep(5)
-
-        # اول reply معمولی
-        try:
-            result = await message.reply(
-                "✅ ربات فعال است و پیام شما را دریافت کرد."
-            )
-
-            print(
-                f"📤 REPLY OK | {result}",
-                flush=True
-            )
-            return
-
-        except Exception as reply_error:
-            print(
-                f"⚠️ REPLY FAILED: "
-                f"{type(reply_error).__name__}: {reply_error}",
-                flush=True
-            )
-
-        # اگر reply شکست خورد، ارسال مستقیم
-        try:
-            result = await bot.send_message(
-                chat_id=message.chat_id,
-                text="✅ ربات فعال است و پیام شما را دریافت کرد.",
-                disable_notification=False
-            )
-
-            print(
-                f"📤 DIRECT SEND OK | {result}",
-                flush=True
-            )
-
-        except Exception as send_error:
-            print(
-                f"❌ DIRECT SEND FAILED: "
-                f"{type(send_error).__name__}: {send_error}",
-                flush=True
-            )
+        # ارسال پیام به چت با ریپلای به پیام کاربر
+        await bot.send_message(
+            chat_id=message.chat_id,
+            text="✅ ربات فعال است و پیام شما را دریافت کرد.",
+            reply_to_message_id=message.message_id,
+            disable_notification=False
+        )
+        print("📤 SENT SUCCESSFULLY", flush=True)
 
     except Exception as e:
-        print(
-            f"❌ HANDLER ERROR: {type(e).__name__}: {e}",
-            flush=True
-        )
-        traceback.print_exc()
+        print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
 
+async def main():
+    print("🤖 RP GROUP MANAGER STARTING...", flush=True)
+    try:
+        await bot.run()
+    except Exception as e:
+        print(f"❌ BOT RUN ERROR: {type(e).__name__}: {e}", flush=True)
 
-print("🤖 RP GROUP MANAGER STARTING...", flush=True)
-print("🚀 BOT RUNNING...", flush=True)
-
-bot.run()
+if __name__ == "__main__":
+    asyncio.run(main())
