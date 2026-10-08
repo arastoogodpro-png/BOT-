@@ -16,21 +16,16 @@ bot = Robot(token=TOKEN)
 CACHE_FILE = "/app/message_cache.json"
 DATA_FILE = "/app/bot_data.json"
 
-# شناسه دکمه‌ها
-BTN_CHANNEL_ID = "btn_channel"
-BTN_HELP_ID = "btn_help"
-BTN_USERS_ID = "btn_users"
-BTN_GROUPS_ID = "btn_groups"
-
-# متن دکمه‌ها (برای تشخیص کلیک)
 BTN_CHANNEL_TEXT = "📢 کانال رسمی"
 BTN_HELP_TEXT = "📚 آموزش فعال‌سازی"
 BTN_USERS_TEXT = "👥 کاربران"
 BTN_GROUPS_TEXT = "🏠 گروه‌های فعال"
 
+MAX_FILTER_WORDS = 50
+
 
 # ================== توابع کمکی ==================
-def clean_message(text: str) -> str:
+def clean_message(text):
     if not text:
         return ""
     text = re.sub(r"@\S+", "", text)
@@ -38,24 +33,43 @@ def clean_message(text: str) -> str:
     return text.strip()
 
 
-def is_group_chat(chat_id: str) -> bool:
-    if not chat_id:
-        return False
-    return str(chat_id).strip().lower().startswith("g")
+def normalize_text(text):
+    """نرمال‌سازی متن برای تشخیص کلمات فیلترشده با تغییرات (فاصله، کاراکتر خاص و...)"""
+    if not text:
+        return ""
+    text = text.lower()
+    # حذف تمام کاراکترهای غیرحرفی (نگه‌داشتن حروف فارسی/عربی/انگلیسی و اعداد)
+    text = re.sub(r'[^a-z0-9\u0600-\u06FF]', '', text)
+    return text
 
 
-def is_private_chat(chat_id: str) -> bool:
+def is_group_chat(chat_id):
+    return bool(chat_id) and str(chat_id).lower().startswith("g")
+
+
+def is_private_chat(chat_id):
     if not chat_id:
         return False
-    cid = str(chat_id).strip().lower()
+    cid = str(chat_id).lower()
     return cid.startswith("u") or cid.startswith("b")
 
 
-def get_now_time() -> str:
+def get_now_time():
     return datetime.now().strftime("%H:%M - %Y/%m/%d")
 
 
-async def get_user_role(chat_id: str, user_id: str) -> str:
+def extract_reply_id(message):
+    for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
+        if hasattr(message, attr):
+            val = getattr(message, attr)
+            if val:
+                if hasattr(val, 'message_id'):
+                    return str(val.message_id)
+                return str(val)
+    return None
+
+
+async def get_user_role(chat_id, user_id):
     try:
         member_info = await bot.get_chat_member(chat_id, user_id)
         if not member_info:
@@ -75,7 +89,7 @@ async def get_user_role(chat_id: str, user_id: str) -> str:
         return "عضو"
 
 
-async def get_chat_name(chat_id: str) -> str:
+async def get_chat_name(chat_id):
     try:
         info = await bot.get_chat_info(chat_id)
         if isinstance(info, dict):
@@ -85,8 +99,24 @@ async def get_chat_name(chat_id: str) -> str:
                 if isinstance(chat, dict):
                     return chat.get("title") or chat.get("name") or "گروه"
         return "گروه"
-    except Exception:
+    except:
         return "گروه"
+
+
+async def get_user_display_name(chat_id, user_id):
+    """دریافت نام کاربر برای نمایش در آمار"""
+    try:
+        info = await bot.get_chat_member(chat_id, user_id)
+        if info:
+            data = info.get("data", info) if isinstance(info, dict) else info
+            member = data.get("chat_member", data) if isinstance(data, dict) else {}
+            name = (member.get("first_name") or member.get("name") or 
+                    member.get("username") or member.get("title"))
+            if name:
+                return str(name)
+    except:
+        pass
+    return str(user_id)[:12] + "..."
 
 
 # ================== فایل‌ها ==================
@@ -115,6 +145,8 @@ def load_data():
         "special_users": {}, "warnings": {}, "warn_limit": {},
         "started_users": [], "known_groups": [],
         "group_message_count": {}, "promo_sent": {},
+        "filtered_words": {},      # {chat_id: [list of words]}
+        "banned_users": {},         # {chat_id: {user_id: timestamp}}
     }
     try:
         if os.path.exists(DATA_FILE):
@@ -140,52 +172,61 @@ def save_data(data):
 # ================== وضعیت‌ها ==================
 bot_is_active = True
 mute_list = {}
-settings = {"link": False, "id": False, "spam": False, "hyperlink": False, "welcome": True, "warning": False}
+settings = {
+    "link": False, "id": False, "spam": False, "hyperlink": False,
+    "welcome": True, "warning": False,
+    "filter": True,   # فیلتر کلمات پیش‌فرض فعال
+    "auto_ban": True, # بن خودکار با اخطار
+}
 spam_tracker = {}
 message_cache = load_cache()
 bot_data = load_data()
 
 
 # ================== توابع تشخیص ==================
-def contains_link(text: str) -> bool:
+def contains_link(text):
     if not text:
         return False
     patterns = [r'https?://\S+', r'www\.\S+', r't\.me/\S+', r'rubika\.ir/\S+',
                 r'telegram\.me/\S+', r'\.ir/\S+', r'\.com/\S+', r'\.org/\S+', r'\.net/\S+', r'\.me/\S+']
-    for p in patterns:
-        if re.search(p, text, re.IGNORECASE):
-            return True
-    return False
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 
-def contains_hyperlink(text: str) -> bool:
+def contains_hyperlink(text):
     if not text:
         return False
-    if re.search(r'\[.+?\]\(.+?\)', text):
-        return True
-    if re.search(r'<a\s+href=', text, re.IGNORECASE):
-        return True
-    return False
+    return bool(re.search(r'\[.+?\]\(.+?\)', text) or re.search(r'<a\s+href=', text, re.IGNORECASE))
 
 
-def contains_id(text: str) -> bool:
+def contains_id(text):
     if not text:
         return False
     return bool(re.search(r'@\w+', text))
 
 
-def is_command(text: str, *commands) -> bool:
+def is_command(text, *commands):
     if not text:
         return False
     t = text.strip()
-    for c in commands:
-        if t == c:
-            return True
-    return False
+    return any(t == c for c in commands)
+
+
+def contains_filtered_word(text, filtered_list):
+    """تشخیص کلمه فیلترشده حتی با تغییرات (مثل ب//یوچ*ک)"""
+    if not text or not filtered_list:
+        return None
+    normalized = normalize_text(text)
+    if not normalized:
+        return None
+    for word in filtered_list:
+        nw = normalize_text(word)
+        if nw and nw in normalized:
+            return word
+    return None
 
 
 # ================== اخطار ==================
-async def add_warning(chat_id: str, user_id: str, reason: str = "") -> bool:
+async def add_warning(chat_id, user_id, reason=""):
     try:
         if chat_id not in bot_data["warnings"]:
             bot_data["warnings"][chat_id] = {}
@@ -197,11 +238,16 @@ async def add_warning(chat_id: str, user_id: str, reason: str = "") -> bool:
         limit = bot_data["warn_limit"].get(chat_id, 3)
         save_data(bot_data)
 
+        # پیدا کردن نام کاربر برای نمایش بهتر
+        user_name = await get_user_display_name(chat_id, user_id)
+
         warn_text = (
             f"⚠️ **اخطار!** ⚠️\n\n"
-            f"👤 کاربر گرامی، شما یک اخطار دریافت کردید.\n"
-            f"📌 **دلیل:** {reason if reason else 'تخلف از قوانین'}\n\n"
+            f"👤 **کاربر:** {user_name}\n"
+            f"🆔 **آیدی:** `{user_id}`\n"
+            f"📌 **دلیل:** {reason if reason else 'تخلف از قوانین'}\n"
             f"📊 **اخطار فعلی:** [{count}/{limit}]\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ **FLUXBOT** | جریان قدرت"
         )
         try:
@@ -209,10 +255,20 @@ async def add_warning(chat_id: str, user_id: str, reason: str = "") -> bool:
         except Exception as e:
             print(f"⚠️ WARN SEND ERROR: {e}", flush=True)
 
-        if count >= limit:
+        if count >= limit and settings.get("auto_ban", True):
             try:
                 await bot.ban_member_chat(chat_id, user_id)
-                await bot.send_message(chat_id=chat_id, text=f"🚫 کاربر به دلیل {limit} اخطار اخراج شد!")
+                if chat_id not in bot_data["banned_users"]:
+                    bot_data["banned_users"][chat_id] = {}
+                bot_data["banned_users"][chat_id][user_id] = time.time()
+                
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🚫 **کاربر اخراج شد!**\n\n"
+                         f"👤 {user_name}\n"
+                         f"🆔 `{user_id}`\n"
+                         f"📊 تعداد اخطار: [{count}/{limit}]"
+                )
                 bot_data["warnings"][chat_id][user_id] = 0
                 save_data(bot_data)
                 return True
@@ -224,44 +280,35 @@ async def add_warning(chat_id: str, user_id: str, reason: str = "") -> bool:
         return False
 
 
-def register_user(user_id: str):
+def register_user(user_id):
     if user_id and user_id not in bot_data["started_users"]:
         bot_data["started_users"].append(user_id)
         save_data(bot_data)
 
 
-def register_group(chat_id: str):
+def register_group(chat_id):
     if chat_id and chat_id not in bot_data["known_groups"]:
         bot_data["known_groups"].append(chat_id)
         save_data(bot_data)
 
 
-# ================== ساخت کیبورد پایین صفحه ==================
+# ================== کیبورد ==================
 def build_chat_keypad():
-    """ساخت کیبورد پایین صفحه با دکمه‌های ساده"""
     try:
         b = ChatKeypadBuilder()
-        # ساخت دکمه‌ها با button_simple
-        btn_channel = b.button_simple(id=BTN_CHANNEL_ID, text=BTN_CHANNEL_TEXT)
-        btn_help = b.button_simple(id=BTN_HELP_ID, text=BTN_HELP_TEXT)
-        btn_users = b.button_simple(id=BTN_USERS_ID, text=BTN_USERS_TEXT)
-        btn_groups = b.button_simple(id=BTN_GROUPS_ID, text=BTN_GROUPS_TEXT)
-
-        # چیدن در ردیف‌ها
-        b.row(btn_channel, btn_help)
-        b.row(btn_users, btn_groups)
-
-        keypad = b.build()
-        print(f"✅ KEYPAD BUILT: {keypad}", flush=True)
-        return keypad
+        btn1 = b.button_simple(id="btn_channel", text=BTN_CHANNEL_TEXT)
+        btn2 = b.button_simple(id="btn_help", text=BTN_HELP_TEXT)
+        btn3 = b.button_simple(id="btn_users", text=BTN_USERS_TEXT)
+        btn4 = b.button_simple(id="btn_groups", text=BTN_GROUPS_TEXT)
+        b.row(btn1, btn2)
+        b.row(btn3, btn4)
+        return b.build()
     except Exception as e:
-        print(f"❌ BUILD KEYPAD ERROR: {type(e).__name__}: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
+        print(f"❌ BUILD KEYPAD ERROR: {e}", flush=True)
         return None
 
 
-# ================== متن‌های دکمه‌ها ==================
+# ================== متن‌ها ==================
 def get_channel_text():
     return (
         "📢 **کانال رسمی ربات FluxBot**\n\n"
@@ -319,7 +366,7 @@ def get_groups_text():
 
 # ================== هندلر پیام‌ها ==================
 @bot.on_message()
-async def handle_message(bot: Robot, message: Message):
+async def handle_message(bot, message):
     global bot_is_active, message_cache, bot_data
 
     try:
@@ -329,23 +376,18 @@ async def handle_message(bot: Robot, message: Message):
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
 
-        # بررسی داده‌های اضافی پیام (برای دکمه‌های کیبوردی)
+        # تشخیص کلیک روی دکمه‌های کیبورد
         aux_data = getattr(message, 'aux_data', None) or getattr(message, 'auxData', None)
         button_id = None
-        if aux_data:
-            if isinstance(aux_data, dict):
-                button_id = aux_data.get('button_id') or aux_data.get('id')
-            elif hasattr(aux_data, 'button_id'):
-                button_id = aux_data.button_id
-
-        if button_id:
-            print(f"🔘 BUTTON CLICKED: {button_id}", flush=True)
+        if aux_data and isinstance(aux_data, dict):
+            button_id = aux_data.get('button_id') or aux_data.get('id')
 
         if sender_id:
             register_user(sender_id)
         if is_group_chat(chat_id):
             register_group(chat_id)
 
+        # ذخیره در کش
         if chat_id and msg_id and sender_id:
             if chat_id not in message_cache:
                 message_cache[chat_id] = {}
@@ -356,6 +398,7 @@ async def handle_message(bot: Robot, message: Message):
                     del message_cache[chat_id][k]
             save_cache(message_cache)
 
+        # فیلتر پیام تکراری
         if not hasattr(handle_message, 'processed'):
             handle_message.processed = {}
             handle_message.last_cleanup = time.time()
@@ -375,25 +418,20 @@ async def handle_message(bot: Robot, message: Message):
         # پیوی
         # ============================================================
         if is_private_chat(chat_id):
-            # === بررسی کلیک روی دکمه‌های کیبورد پایین صفحه ===
-            # روش ۱: با button_id از aux_data
-            if button_id == BTN_CHANNEL_ID or raw_text == BTN_CHANNEL_TEXT:
+            if button_id == "btn_channel" or raw_text == BTN_CHANNEL_TEXT:
                 await bot.send_message(chat_id=chat_id, text=get_channel_text())
                 return
-            if button_id == BTN_HELP_ID or raw_text == BTN_HELP_TEXT:
+            if button_id == "btn_help" or raw_text == BTN_HELP_TEXT:
                 await bot.send_message(chat_id=chat_id, text=get_help_text())
                 return
-            if button_id == BTN_USERS_ID or raw_text == BTN_USERS_TEXT:
+            if button_id == "btn_users" or raw_text == BTN_USERS_TEXT:
                 await bot.send_message(chat_id=chat_id, text=get_users_text())
                 return
-            if button_id == BTN_GROUPS_ID or raw_text == BTN_GROUPS_TEXT:
+            if button_id == "btn_groups" or raw_text == BTN_GROUPS_TEXT:
                 await bot.send_message(chat_id=chat_id, text=get_groups_text())
                 return
 
-            # === دستور start / منو ===
             if is_command(clean_text, "start", "شروع", "منو"):
-                print("📤 SENDING PV MENU WITH CHAT KEYPAD", flush=True)
-
                 welcome_text = (
                     "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
                     "   ⚡ **FLUXBOT** ⚡\n"
@@ -404,20 +442,15 @@ async def handle_message(bot: Robot, message: Message):
                     "با من می‌تونید گروهتون رو به بهترین شکل مدیریت کنید.\n\n"
                     "👇 **از منوی پایین، یکی از گزینه‌ها رو انتخاب کنید:**"
                 )
-
                 keypad = build_chat_keypad()
-
-                if keypad is not None:
+                if keypad:
                     try:
                         await bot.send_message(
-                            chat_id=chat_id,
-                            text=welcome_text,
-                            chat_keypad=keypad,
-                            chat_keypad_type="New"
+                            chat_id=chat_id, text=welcome_text,
+                            chat_keypad=keypad, chat_keypad_type="New"
                         )
-                        print("📤 SENT WITH CHAT KEYPAD ✅", flush=True)
                     except Exception as e:
-                        print(f"❌ SEND KEYPAD FAILED: {type(e).__name__}: {e}", flush=True)
+                        print(f"❌ KEYPAD SEND: {e}", flush=True)
                         await bot.send_message(chat_id=chat_id, text=welcome_text)
                 else:
                     await bot.send_message(chat_id=chat_id, text=welcome_text)
@@ -430,7 +463,7 @@ async def handle_message(bot: Robot, message: Message):
         if not is_group_chat(chat_id):
             return
 
-        # شمارنده پیام (تبلیغ 200 پیامی)
+        # شمارنده پیام گروه
         if chat_id not in bot_data["group_message_count"]:
             bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
@@ -452,8 +485,8 @@ async def handle_message(bot: Robot, message: Message):
             )
             try:
                 await bot.send_message(chat_id=chat_id, text=promo_text)
-            except Exception as e:
-                print(f"❌ PROMO ERROR: {e}", flush=True)
+            except:
+                pass
         else:
             save_data(bot_data)
 
@@ -465,8 +498,8 @@ async def handle_message(bot: Robot, message: Message):
             if now < end_time:
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                except Exception as e:
-                    print(f"❌ DELETE FAILED: {e}", flush=True)
+                except:
+                    pass
                 return
             else:
                 del chat_mutes[sender_id]
@@ -504,8 +537,8 @@ async def handle_message(bot: Robot, message: Message):
                 )
                 try:
                     await bot.send_message(chat_id=chat_id, text=welcome_text, reply_to_message_id=message.message_id)
-                except Exception as e:
-                    print(f"❌ WELCOME ERROR: {e}", flush=True)
+                except:
+                    pass
                 if chat_id not in bot_data["welcomed_users"]:
                     bot_data["welcomed_users"][chat_id] = {}
                 bot_data["welcomed_users"][chat_id][sender_id] = True
@@ -523,29 +556,210 @@ async def handle_message(bot: Robot, message: Message):
         bot_data["message_counts"][chat_id][sender_id]["today"] += 1
         save_data(bot_data)
 
-        # --- دستورات ---
+        # ============================================================
+        # دستورات
+        # ============================================================
+
+        # --- فعال ---
         if is_command(clean_text, "فعال", "فاعل"):
             if not can_manage:
                 return
-            if bot_is_active:
-                reply_text = "✅ ربات از قبل فعال است."
-            else:
-                bot_is_active = True
-                reply_text = "✅ ربات فعال شد."
+            reply_text = "✅ ربات از قبل فعال است." if bot_is_active else "✅ ربات فعال شد."
+            bot_is_active = True
             await bot.send_message(chat_id=message.chat_id, text=reply_text, reply_to_message_id=message.message_id)
             return
 
+        # --- غیرفعال ---
         if is_command(clean_text, "غیرفعال", "غيرفعال"):
             if not is_owner:
                 return
-            if not bot_is_active:
-                reply_text = "⛔ ربات از قبل غیرفعال است."
-            else:
-                bot_is_active = False
-                reply_text = "🛑 ربات غیرفعال شد."
+            reply_text = "⛔ ربات از قبل غیرفعال است." if not bot_is_active else "🛑 ربات غیرفعال شد."
+            bot_is_active = False
             await bot.send_message(chat_id=message.chat_id, text=reply_text, reply_to_message_id=message.message_id)
             return
 
+        # --- بن / سیک / اخراج (فقط مالک و ویژه) ---
+        if is_command(clean_text, "بن", "سیک", "اخراج", "ban"):
+            if not can_manage:
+                return
+            print("🚫 BAN COMMAND", flush=True)
+
+            reply_id = extract_reply_id(message)
+            target_user_id = None
+            if reply_id:
+                cache = load_cache()
+                if chat_id in cache and reply_id in cache[chat_id]:
+                    target_user_id = cache[chat_id][reply_id]
+
+            if not target_user_id:
+                await bot.send_message(chat_id=message.chat_id, text="⚠️ لطفاً روی پیام کاربر مورد نظر ریپلای کنید.", reply_to_message_id=message.message_id)
+                return
+
+            try:
+                user_name = await get_user_display_name(chat_id, target_user_id)
+                await bot.ban_member_chat(chat_id, target_user_id)
+                
+                if chat_id not in bot_data["banned_users"]:
+                    bot_data["banned_users"][chat_id] = {}
+                bot_data["banned_users"][chat_id][target_user_id] = time.time()
+                save_data(bot_data)
+
+                ban_text = (
+                    f"🚫 **کاربر اخراج شد!** 🚫\n\n"
+                    f"👤 **کاربر:** {user_name}\n"
+                    f"🆔 **آیدی:** `{target_user_id}`\n"
+                    f"📌 **دلیل:** تخلف از قوانین\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ **FLUXBOT** | جریان قدرت"
+                )
+                await bot.send_message(chat_id=message.chat_id, text=ban_text, reply_to_message_id=message.message_id)
+                print(f"🚫 BANNED: {target_user_id}", flush=True)
+            except Exception as e:
+                print(f"❌ BAN ERROR: {e}", flush=True)
+                await bot.send_message(chat_id=message.chat_id, text=f"❌ خطا در اخراج کاربر: {e}", reply_to_message_id=message.message_id)
+            return
+
+        # --- انبن / آنبن (فقط مالک و ویژه) ---
+        if is_command(clean_text, "انبن", "آنبن", "ان بن", "unban"):
+            if not can_manage:
+                return
+            print("✅ UNBAN COMMAND", flush=True)
+
+            reply_id = extract_reply_id(message)
+            target_user_id = None
+            if reply_id:
+                cache = load_cache()
+                if chat_id in cache and reply_id in cache[chat_id]:
+                    target_user_id = cache[chat_id][reply_id]
+
+            if not target_user_id:
+                await bot.send_message(chat_id=message.chat_id, text="⚠️ لطفاً روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
+                return
+
+            try:
+                user_name = await get_user_display_name(chat_id, target_user_id)
+                await bot.unban_member_chat(chat_id, target_user_id)
+                
+                if chat_id in bot_data["banned_users"] and target_user_id in bot_data["banned_users"][chat_id]:
+                    del bot_data["banned_users"][chat_id][target_user_id]
+                    save_data(bot_data)
+
+                unban_text = (
+                    f"✅ **کاربر آنبن شد!** ✅\n\n"
+                    f"👤 **کاربر:** {user_name}\n"
+                    f"🆔 **آیدی:** `{target_user_id}`\n"
+                    f"🌟 از لیست سیاه حذف شد.\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ **FLUXBOT** | جریان قدرت"
+                )
+                await bot.send_message(chat_id=message.chat_id, text=unban_text, reply_to_message_id=message.message_id)
+                print(f"✅ UNBANNED: {target_user_id}", flush=True)
+            except Exception as e:
+                print(f"❌ UNBAN ERROR: {e}", flush=True)
+                await bot.send_message(chat_id=message.chat_id, text=f"❌ خطا در آنبن: {e}", reply_to_message_id=message.message_id)
+            return
+
+        # --- فیلتر [کلمه] (فقط مالک) ---
+        filter_match = re.match(r"^فیلتر\s+(.+)$", clean_text)
+        if filter_match:
+            if not is_owner:
+                return
+            word = filter_match.group(1).strip()
+            if not word:
+                await bot.send_message(chat_id=message.chat_id, text="⚠️ یک کلمه وارد کنید.", reply_to_message_id=message.message_id)
+                return
+
+            if chat_id not in bot_data["filtered_words"]:
+                bot_data["filtered_words"][chat_id] = []
+
+            if word in bot_data["filtered_words"][chat_id]:
+                await bot.send_message(chat_id=message.chat_id, text=f"⚠️ کلمه «{word}» از قبل فیلتر شده.", reply_to_message_id=message.message_id)
+                return
+
+            if len(bot_data["filtered_words"][chat_id]) >= MAX_FILTER_WORDS:
+                await bot.send_message(chat_id=message.chat_id, text=f"⚠️ حداکثر {MAX_FILTER_WORDS} کلمه می‌توانید فیلتر کنید.", reply_to_message_id=message.message_id)
+                return
+
+            bot_data["filtered_words"][chat_id].append(word)
+            save_data(bot_data)
+            count = len(bot_data["filtered_words"][chat_id])
+            
+            await bot.send_message(
+                chat_id=message.chat_id,
+                text=f"✅ **کلمه فیلتر شد!**\n\n"
+                     f"🚫 کلمه: `{word}`\n"
+                     f"📊 تعداد فیلترها: {count}/{MAX_FILTER_WORDS}",
+                reply_to_message_id=message.message_id
+            )
+            return
+
+        # --- حذف فیلتر [کلمه] (فقط مالک) ---
+        unfilter_match = re.match(r"^حذف\s+فیلتر\s+(.+)$", clean_text)
+        if unfilter_match:
+            if not is_owner:
+                return
+            word = unfilter_match.group(1).strip()
+            if chat_id in bot_data["filtered_words"] and word in bot_data["filtered_words"][chat_id]:
+                bot_data["filtered_words"][chat_id].remove(word)
+                save_data(bot_data)
+                await bot.send_message(chat_id=message.chat_id, text=f"✅ کلمه «{word}» از لیست فیلتر حذف شد.", reply_to_message_id=message.message_id)
+            else:
+                await bot.send_message(chat_id=message.chat_id, text=f"⚠️ کلمه «{word}» در لیست فیلتر نبود.", reply_to_message_id=message.message_id)
+            return
+
+        # --- لیست فیلتر (مالک و ویژه) ---
+        if is_command(clean_text, "لیست فیلتر", "فیلترها"):
+            if not can_manage:
+                return
+            words = bot_data["filtered_words"].get(chat_id, [])
+            if not words:
+                text = "📋 **لیست فیلتر خالی است.**"
+            else:
+                word_list = "\n".join([f"├ 🚫 {w}" for w in words])
+                text = f"📋 **لیست کلمات فیلترشده ({len(words)}/{MAX_FILTER_WORDS}):**\n\n{word_list}"
+            await bot.send_message(chat_id=message.chat_id, text=text, reply_to_message_id=message.message_id)
+            return
+
+        # --- آمار گروه (Top 10) ---
+        if is_command(clean_text, "آمار", "آمار گروه", "برترین‌ها", "تاپ"):
+            print("📊 GROUP STATS", flush=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            counts = bot_data["message_counts"].get(chat_id, {})
+            
+            # فیلتر و مرتب‌سازی
+            today_counts = []
+            for uid, data in counts.items():
+                if data.get("date") == today and data.get("today", 0) > 0:
+                    today_counts.append((uid, data["today"]))
+            
+            today_counts.sort(key=lambda x: x[1], reverse=True)
+            top10 = today_counts[:10]
+
+            if not top10:
+                await bot.send_message(chat_id=message.chat_id, text="📊 **امروز هنوز پیامی ارسال نشده است.**", reply_to_message_id=message.message_id)
+                return
+
+            # ساخت متن
+            medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+            lines = []
+            for i, (uid, count) in enumerate(top10):
+                name = await get_user_display_name(chat_id, uid)
+                lines.append(f"{medals[i]} **{name}** — `{count}` پیام")
+
+            stats_text = (
+                "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+                "   ⚡ **FLUXBOT** ⚡\n"
+                "   🏆 برترین‌های امروز 🏆\n"
+                "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+                + "\n".join(lines) +
+                f"\n\n━━━━━━━━━━━━━━━━━━━\n"
+                f"📅 {today}\n"
+                f"⚡ **FLUXBOT** | جریان قدرت"
+            )
+            await bot.send_message(chat_id=message.chat_id, text=stats_text, reply_to_message_id=message.message_id)
+            return
+
+        # --- سکوت ---
         mute_match = re.match(r"^سکوت\s+(\d+)$", clean_text)
         if mute_match:
             if not can_manage:
@@ -555,20 +769,11 @@ async def handle_message(bot: Robot, message: Message):
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ عدد باید بیشتر از صفر باشد.", reply_to_message_id=message.message_id)
                 return
             target_user_id = None
-            reply_id = None
-            for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
-                if hasattr(message, attr):
-                    val = getattr(message, attr)
-                    if val:
-                        if hasattr(val, 'message_id'):
-                            reply_id = str(val.message_id)
-                        else:
-                            reply_id = str(val)
-                        break
+            reply_id = extract_reply_id(message)
             if reply_id:
-                message_cache = load_cache()
-                if chat_id in message_cache and reply_id in message_cache[chat_id]:
-                    target_user_id = message_cache[chat_id][reply_id]
+                cache = load_cache()
+                if chat_id in cache and reply_id in cache[chat_id]:
+                    target_user_id = cache[chat_id][reply_id]
             if not target_user_id:
                 target_user_id = sender_id
             end_time = time.time() + (minutes * 60)
@@ -578,6 +783,7 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=f"🔇 کاربر سکوت شد ({minutes} دقیقه).", reply_to_message_id=message.message_id)
             return
 
+        # --- تنظیم اخطار ---
         warn_set_match = re.match(r"^تنظیم\s+اخطار\s+(\d+)$", clean_text)
         if warn_set_match:
             if not is_owner:
@@ -592,48 +798,32 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=f"✅ سیستم اخطار فعال شد (حداکثر: {limit})", reply_to_message_id=message.message_id)
             return
 
+        # --- اخطار دستی ---
         if is_command(clean_text, "اخطار"):
             if not is_owner:
                 return
             target_user_id = None
-            reply_id = None
-            for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
-                if hasattr(message, attr):
-                    val = getattr(message, attr)
-                    if val:
-                        if hasattr(val, 'message_id'):
-                            reply_id = str(val.message_id)
-                        else:
-                            reply_id = str(val)
-                        break
+            reply_id = extract_reply_id(message)
             if reply_id:
-                message_cache = load_cache()
-                if chat_id in message_cache and reply_id in message_cache[chat_id]:
-                    target_user_id = message_cache[chat_id][reply_id]
+                cache = load_cache()
+                if chat_id in cache and reply_id in cache[chat_id]:
+                    target_user_id = cache[chat_id][reply_id]
             if not target_user_id:
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
-            await add_warning(chat_id, target_user_id, "اخطار دستی")
+            await add_warning(chat_id, target_user_id, "اخطار دستی از طرف مالک")
             return
 
+        # --- ویژه ---
         if is_command(clean_text, "ویژه", "ادمین", "ویژه کردن", "ادمین کردن"):
             if not is_owner:
                 return
             target_user_id = None
-            reply_id = None
-            for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
-                if hasattr(message, attr):
-                    val = getattr(message, attr)
-                    if val:
-                        if hasattr(val, 'message_id'):
-                            reply_id = str(val.message_id)
-                        else:
-                            reply_id = str(val)
-                        break
+            reply_id = extract_reply_id(message)
             if reply_id:
-                message_cache = load_cache()
-                if chat_id in message_cache and reply_id in message_cache[chat_id]:
-                    target_user_id = message_cache[chat_id][reply_id]
+                cache = load_cache()
+                if chat_id in cache and reply_id in cache[chat_id]:
+                    target_user_id = cache[chat_id][reply_id]
             if not target_user_id:
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -644,24 +834,16 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text="⭐ کاربر با موفقیت ویژه شد!", reply_to_message_id=message.message_id)
             return
 
+        # --- حذف ویژه ---
         if is_command(clean_text, "حذف ویژه", "لغو ویژه", "حذف ادمین"):
             if not is_owner:
                 return
             target_user_id = None
-            reply_id = None
-            for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
-                if hasattr(message, attr):
-                    val = getattr(message, attr)
-                    if val:
-                        if hasattr(val, 'message_id'):
-                            reply_id = str(val.message_id)
-                        else:
-                            reply_id = str(val)
-                        break
+            reply_id = extract_reply_id(message)
             if reply_id:
-                message_cache = load_cache()
-                if chat_id in message_cache and reply_id in message_cache[chat_id]:
-                    target_user_id = message_cache[chat_id][reply_id]
+                cache = load_cache()
+                if chat_id in cache and reply_id in cache[chat_id]:
+                    target_user_id = cache[chat_id][reply_id]
             if target_user_id and chat_id in bot_data["special_users"]:
                 if target_user_id in bot_data["special_users"][chat_id]:
                     del bot_data["special_users"][chat_id][target_user_id]
@@ -671,6 +853,7 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text="⚠️ کاربر در لیست ویژه نبود.", reply_to_message_id=message.message_id)
             return
 
+        # --- قفل‌ها ---
         feature_match = re.match(r"^(لینک|آیدی|اسپم|هایپرلینک|خوش‌آمدگویی|خوش‌امدگویی)\s+(باز|بسته)$", clean_text)
         if feature_match:
             if not can_manage:
@@ -688,12 +871,14 @@ async def handle_message(bot: Robot, message: Message):
                 await bot.send_message(chat_id=message.chat_id, text=f"✅ {feature} {status_text} شد.", reply_to_message_id=message.message_id)
             return
 
+        # --- لیست قفل ---
         if is_command(clean_text, "لیست قفل"):
             if not can_manage:
                 return
             def st(v): return "🔴 بسته" if v else "🟢 باز"
             warn_limit = bot_data["warn_limit"].get(chat_id, 3)
             warn_status = "🔴 فعال" if settings["warning"] else "🟢 غیرفعال"
+            filter_count = len(bot_data["filtered_words"].get(chat_id, []))
             reply_text = (
                 "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
                 "   ⚡ **FLUXBOT** ⚡\n"
@@ -704,13 +889,15 @@ async def handle_message(bot: Robot, message: Message):
                 f"📢 **اسپم:** {st(settings['spam'])}\n"
                 f"🔗 **هایپرلینک:** {st(settings['hyperlink'])}\n"
                 f"👋 **خوش‌آمدگویی:** {st(settings['welcome'])}\n"
-                f"⚠️ **اخطار:** {warn_status} (حداکثر: {warn_limit})\n\n"
+                f"⚠️ **اخطار:** {warn_status} (حداکثر: {warn_limit})\n"
+                f"🚫 **کلمات فیلتر:** {filter_count}/{MAX_FILTER_WORDS}\n\n"
                 "━━━━━━━━━━━━━━━━━━━\n"
                 "⚡ **FLUXBOT** | جریان قدرت"
             )
             await bot.send_message(chat_id=message.chat_id, text=reply_text, reply_to_message_id=message.message_id)
             return
 
+        # --- راهنما ---
         if is_command(clean_text, "راهنما", "help", "دستور", "دستورات"):
             help_text = (
                 "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
@@ -720,15 +907,21 @@ async def handle_message(bot: Robot, message: Message):
                 "👤 **دستورات کاربران:**\n"
                 "├ 👑 `مقام`\n"
                 "├ 📊 `پروفایل`\n"
+                "├ 🏆 `آمار` - برترین‌های امروز\n"
                 "├ 🐺 `تنظیم اصل [نام]`\n"
                 "├ 🎭 `تنظیم لقب [نام]`\n"
                 "└ 📚 `راهنما`\n\n"
                 "👑 **دستورات مالک / ویژه:**\n"
                 "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
+                "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
+                "├ ✅ `انبن` (ریپلای)\n"
                 "├ 🔇 `سکوت [عدد]`\n"
-                "├ ⚠️ `اخطار`\n"
+                "├ ⚠️ `اخطار` (ریپلای)\n"
                 "├ ⚙️ `تنظیم اخطار [عدد]`\n"
                 "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
+                "├ 🚫 `فیلتر [کلمه]` - افزودن فیلتر\n"
+                "├ ❌ `حذف فیلتر [کلمه]`\n"
+                "├ 📋 `لیست فیلتر`\n"
                 "├ 🔗 `لینک باز/بسته`\n"
                 "├ 🆔 `آیدی باز/بسته`\n"
                 "├ 📢 `اسپم باز/بسته`\n"
@@ -741,6 +934,7 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=help_text, reply_to_message_id=message.message_id)
             return
 
+        # --- تنظیم اصل ---
         asl_match = re.match(r"^تنظیم\s+اصل\s+(.+)$", clean_text)
         if asl_match:
             asl_value = asl_match.group(1).strip()
@@ -767,6 +961,7 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=f"✅ اصل ثبت شد:\n🐺 `{asl_value}`", reply_to_message_id=message.message_id)
             return
 
+        # --- تنظیم لقب ---
         laghab_match = re.match(r"^تنظیم\s+لقب\s+(.+)$", clean_text)
         if laghab_match:
             laghab_value = laghab_match.group(1).strip()
@@ -793,7 +988,8 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=f"✅ لقب ثبت شد:\n🎭 `{laghab_value}`", reply_to_message_id=message.message_id)
             return
 
-        if is_command(clean_text, "پروفایل", "آمار", "آمارم", "امار", "امارم", "profile"):
+        # --- پروفایل ---
+        if is_command(clean_text, "پروفایل", "آمارم", "امارم", "profile"):
             user_titles = bot_data["user_titles"].get(chat_id, {}).get(sender_id, {})
             asl = user_titles.get("asl", "ثبت نشده")
             laghab = user_titles.get("laghab", "ثبت نشده")
@@ -829,16 +1025,34 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=reply_text, reply_to_message_id=message.message_id)
             return
 
+        # --- مقام ---
         if is_command(clean_text, "مقام"):
             await bot.send_message(chat_id=message.chat_id, text=f"👤 **مقام شما:** {role}", reply_to_message_id=message.message_id)
             return
 
-        # --- بررسی خودکار ---
+        # ============================================================
+        # بررسی خودکار
+        # ============================================================
         if not bot_is_active:
             return
         if can_manage:
             return
 
+        # --- فیلتر کلمات ---
+        if settings["filter"]:
+            filtered_list = bot_data["filtered_words"].get(chat_id, [])
+            matched = contains_filtered_word(raw_text, filtered_list)
+            if matched:
+                print(f"🚫 FILTERED WORD: {matched}", flush=True)
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings["warning"]:
+                        await add_warning(chat_id, sender_id, f"استفاده از کلمه فیلترشده: {matched}")
+                except Exception as e:
+                    print(f"❌ DELETE FAILED: {e}", flush=True)
+                return
+
+        # --- اسپم ---
         if settings["spam"]:
             now = time.time()
             if chat_id not in spam_tracker:
@@ -856,6 +1070,7 @@ async def handle_message(bot: Robot, message: Message):
                     print(f"❌ DELETE FAILED: {e}", flush=True)
                 return
 
+        # --- لینک ---
         if settings["link"] and contains_link(raw_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -865,6 +1080,7 @@ async def handle_message(bot: Robot, message: Message):
                 print(f"❌ DELETE FAILED: {e}", flush=True)
             return
 
+        # --- هایپرلینک ---
         if settings["hyperlink"] and contains_hyperlink(raw_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -874,6 +1090,7 @@ async def handle_message(bot: Robot, message: Message):
                 print(f"❌ DELETE FAILED: {e}", flush=True)
             return
 
+        # --- آیدی ---
         if settings["id"] and contains_id(raw_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
