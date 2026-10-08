@@ -9,14 +9,13 @@ if not TOKEN:
 
 bot = Robot(token=TOKEN)
 
-# هندلر عمومی برای همه پیام‌ها
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
     try:
         text = (message.text or "").strip()
         print(f"📩 MESSAGE | chat={message.chat_id} | text={text!r}", flush=True)
 
-        # فقط به کلمات فعال‌سازی جواب بده
+        # بررسی دستور فعال‌سازی
         if text not in ("فعال", "فاعل", "/start"):
             return
 
