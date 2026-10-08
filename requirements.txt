@@ -1,3 +1,2 @@
 rubka==8.1.12
-Pillow
-markdownify
+aiohttp
