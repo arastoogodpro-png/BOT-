@@ -50,10 +50,6 @@ async def get_user_role(chat_id: str, user_id: str) -> str:
 bot_is_active = True
 mute_list = {}          # {chat_id: {user_id: end_timestamp}}
 
-# دیکشنری برای ذخیره پیام‌ها: {chat_id: {text: sender_id}}
-# این روش ۱۰۰٪ مطمئنه چون به API وابسته نیست
-text_to_sender = {}
-
 
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
@@ -65,18 +61,6 @@ async def handle_message(bot: Robot, message: Message):
         sender_id = str(message.sender_id) if message.sender_id else ""
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
-
-        # ================== ذخیره پیام در دیکشنری ==================
-        if chat_id and sender_id and raw_text:
-            if chat_id not in text_to_sender:
-                text_to_sender[chat_id] = {}
-            text_to_sender[chat_id][raw_text] = sender_id
-
-            # پاکسازی دیکشنری (نگه‌داشتن ۱۰۰ پیام آخر)
-            if len(text_to_sender[chat_id]) > 100:
-                keys = list(text_to_sender[chat_id].keys())[:50]
-                for k in keys:
-                    del text_to_sender[chat_id][k]
 
         # ================== فیلتر پیام تکراری (قوی) ==================
         if not hasattr(handle_message, 'processed'):
@@ -180,49 +164,90 @@ async def handle_message(bot: Robot, message: Message):
                 return
 
             target_user_id = None
+            reply_id = None
 
-            # ============================================================
-            # روش اصلی: خواندن متن پیام ریپلای‌شده و جستجو در دیکشنری
-            # ============================================================
-            reply_text_content = None
-            
-            # بررسی فیلدهای مختلف برای پیام ریپلای‌شده
-            if hasattr(message, 'reply_to_message') and message.reply_to_message:
-                replied = message.reply_to_message
-                if hasattr(replied, 'text') and replied.text:
-                    reply_text_content = str(replied.text).strip()
-                    print(f"🔍 REPLIED TEXT: {reply_text_content!r}", flush=True)
-            
-            # اگه reply_to_message نبود، از reply_to_message_id استفاده کن
-            if not reply_text_content:
-                reply_id = None
-                for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
-                    if hasattr(message, attr):
-                        val = getattr(message, attr)
-                        if val:
-                            if hasattr(val, 'message_id'):
-                                reply_id = str(val.message_id)
-                            else:
-                                reply_id = str(val)
-                            break
-                print(f"🔍 REPLY ID: {reply_id}", flush=True)
-
-            # جستجو در دیکشنری با متن پیام
-            if reply_text_content and chat_id in text_to_sender:
-                target_user_id = text_to_sender[chat_id].get(reply_text_content)
-                if target_user_id:
-                    print(f"🎯 TARGET FOUND BY TEXT: {target_user_id}", flush=True)
-
-            # اگه با متن پیدا نشد، تلاش کن با متن پاک‌سازی‌شده
-            if not target_user_id and reply_text_content and chat_id in text_to_sender:
-                clean_reply = clean_message(reply_text_content)
-                for stored_text, uid in text_to_sender[chat_id].items():
-                    if clean_message(stored_text) == clean_reply:
-                        target_user_id = uid
-                        print(f"🎯 TARGET FOUND BY CLEAN TEXT: {target_user_id}", flush=True)
+            # پیدا کردن reply_id
+            for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
+                if hasattr(message, attr):
+                    val = getattr(message, attr)
+                    if val:
+                        if hasattr(val, 'message_id'):
+                            reply_id = str(val.message_id)
+                        else:
+                            reply_id = str(val)
                         break
 
-            # اگه هیچی پیدا نشد، خود فرستنده سکوت کن
+            print(f"🔍 REPLY ID: {reply_id}", flush=True)
+
+            # ============================================================
+            # روش قطعی: استفاده از get_updates و چاپ کامل ساختار
+            # ============================================================
+            if reply_id:
+                try:
+                    updates = await bot.get_updates()
+                    print(f"🔍 UPDATES TYPE: {type(updates)}", flush=True)
+
+                    # تبدیل به دیکشنری/لیست
+                    update_list = []
+                    if hasattr(updates, '__dict__'):
+                        # اگه AttrDict بود، به دیکشنری تبدیل کن
+                        updates_dict = dict(updates)
+                        print(f"🔍 UPDATES KEYS: {list(updates_dict.keys())}", flush=True)
+                        
+                        # جستجوی لیست آپدیت‌ها
+                        for key, value in updates_dict.items():
+                            if isinstance(value, list):
+                                update_list = value
+                                print(f"🔍 FOUND LIST IN KEY: {key} | LENGTH: {len(value)}", flush=True)
+                                break
+                    elif isinstance(updates, dict):
+                        data = updates.get("data", {})
+                        if isinstance(data, dict):
+                            update_list = data.get("updates", []) or data.get("messages", [])
+                        elif isinstance(data, list):
+                            update_list = data
+                    elif isinstance(updates, list):
+                        update_list = updates
+
+                    print(f"🔍 UPDATE LIST LENGTH: {len(update_list)}", flush=True)
+
+                    # چاپ اولین آپدیت برای دیدن ساختار
+                    if update_list:
+                        print(f"🔍 FIRST UPDATE SAMPLE: {update_list[0]}", flush=True)
+
+                    # جستجوی پیام با message_id == reply_id
+                    for upd in update_list:
+                        if not isinstance(upd, dict):
+                            continue
+                        
+                        # بررسی تمام فیلدهای ممکن برای message_id
+                        msg_id_val = str(
+                            upd.get("message_id") or 
+                            upd.get("id") or 
+                            ""
+                        )
+                        
+                        # بررسی توی message داخلی
+                        inner_msg = upd.get("message", {})
+                        if isinstance(inner_msg, dict):
+                            msg_id_val = msg_id_val or str(inner_msg.get("message_id") or "")
+                        
+                        if msg_id_val == str(reply_id):
+                            sender = str(
+                                upd.get("sender_id") or 
+                                upd.get("user_id") or 
+                                inner_msg.get("sender_id") or 
+                                ""
+                            )
+                            if sender:
+                                target_user_id = sender
+                                print(f"🎯 TARGET FOUND: {target_user_id}", flush=True)
+                                break
+
+                except Exception as e:
+                    print(f"⚠️ GET UPDATES ERROR: {e}", flush=True)
+
+            # اگه پیدا نشد، خود فرستنده سکوت کن
             if not target_user_id:
                 target_user_id = sender_id
                 print(f"⚠️ NO TARGET - MUTING SENDER: {target_user_id}", flush=True)
