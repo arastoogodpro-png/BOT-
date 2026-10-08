@@ -1,102 +1,49 @@
 import os
-import time
-import traceback
+import asyncio
 
-from rubka import Robot
+from rubka import Robot, Message
+
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("RUBIKA_TOKEN تنظیم نشده است.")
+    raise RuntimeError("RUBIKA_TOKEN پیدا نشد.")
+
 
 bot = Robot(token=TOKEN)
 
-print("🤖 TEST STARTING...", flush=True)
 
-# راه‌اندازی 30 ثانیه‌ای
-time.sleep(30)
-
-print("🚀 DIRECT getUpdates TEST STARTED", flush=True)
-
-offset_id = None
-
-while True:
+@bot.on_message()
+async def handle_message(bot: Robot, message: Message):
     try:
-        result = bot.get_updates(
-            offset_id=offset_id,
-            limit=100
-        )
+        text = (message.text or "").strip()
 
         print(
-            "📥 RAW UPDATE RESPONSE:",
-            repr(result),
+            f"📩 MESSAGE RECEIVED | "
+            f"chat={message.chat_id} | "
+            f"sender={message.sender_id} | "
+            f"text={text!r}",
             flush=True
         )
 
-        if isinstance(result, dict):
-            data = result.get("data", {})
+        if text == "فعال":
+            print("✅ فعال دریافت شد", flush=True)
 
-            if isinstance(data, dict):
-                new_offset = data.get("next_offset_id")
+            await asyncio.sleep(5)
 
-                if new_offset:
-                    offset_id = new_offset
+            await message.reply(
+                "✅ فعال شدم!\n"
+                "🤖 پیام شما با موفقیت دریافت شد."
+            )
 
-                updates = data.get("updates", [])
+            print("📤 RESPONSE SENT", flush=True)
 
-                for update in updates:
-                    print(
-                        "🔔 UPDATE RECEIVED:",
-                        repr(update),
-                        flush=True
-                    )
+    except Exception as e:
+        print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
 
-                    if update.get("type") != "NewMessage":
-                        continue
 
-                    chat_id = update.get("chat_id")
-                    msg = update.get("new_message", {})
+print("🤖 RP GROUP MANAGER STARTING...", flush=True)
 
-                    text = (msg.get("text") or "").strip()
+print("🚀 BOT STARTING...", flush=True)
 
-                    print(
-                        f"💬 MESSAGE: chat={chat_id} text={text!r}",
-                        flush=True
-                    )
-
-                    if text == "فعال" and chat_id:
-
-                        print(
-                            "✅ فعال RECEIVED - waiting 5 seconds...",
-                            flush=True
-                        )
-
-                        time.sleep(5)
-
-                        try:
-                            bot.send_message(
-                                chat_id,
-                                "✅ ربات پیام «فعال» را دریافت کرد."
-                            )
-
-                            print(
-                                "📤 RESPONSE SENT",
-                                flush=True
-                            )
-
-                        except Exception:
-                            print(
-                                "❌ SEND ERROR:",
-                                flush=True
-                            )
-                            traceback.print_exc()
-
-        time.sleep(1)
-
-    except Exception:
-        print(
-            "❌ GET UPDATES ERROR:",
-            flush=True
-        )
-        traceback.print_exc()
-        time.sleep(5)
+bot.run()
