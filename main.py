@@ -9,24 +9,16 @@ if not TOKEN:
 
 bot = Robot(token=TOKEN)
 
+
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
     try:
         text = (message.text or "").strip()
+
         print(f"📩 MESSAGE | chat={message.chat_id} | text={text!r}", flush=True)
 
-        # حذف منشن ربات از متن (چون توی گروه به صورت @Jsbdjkdbot فعال میاد)
-        clean_text = text
-        if "@" in text:
-            # جدا کردن بخش منشن از متن اصلی
-            parts = text.split()
-            clean_parts = [p for p in parts if not p.startswith("@")]
-            clean_text = " ".join(clean_parts).strip()
-
-        print(f"🧹 CLEAN TEXT: {clean_text!r}", flush=True)
-
-        # بررسی دستور فعال‌سازی
-        if clean_text not in ("فعال", "فاعل", "/start", "start"):
+        # فقط و فقط کلمه «فعال» رو قبول کن (بدون منشن، بدون اسلش)
+        if text != "فعال":
             return
 
         print("✅ ACTIVATE COMMAND", flush=True)
@@ -34,7 +26,7 @@ async def handle_message(bot: Robot, message: Message):
         # ارسال پیام به گروه
         result = await bot.send_message(
             chat_id=message.chat_id,
-            text="✅ ربات فعال است و پیام شما را دریافت کرد.",
+            text="✅ ربات فعال شد.",
             reply_to_message_id=message.message_id,
             disable_notification=False
         )
@@ -43,12 +35,14 @@ async def handle_message(bot: Robot, message: Message):
     except Exception as e:
         print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
 
+
 async def main():
     print("🤖 RP GROUP MANAGER STARTING...", flush=True)
     try:
         await bot.run()
     except Exception as e:
         print(f"❌ BOT RUN ERROR: {type(e).__name__}: {e}", flush=True)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
