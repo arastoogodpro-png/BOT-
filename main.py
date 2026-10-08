@@ -11,7 +11,9 @@ if not TOKEN:
 bot = Robot(token=TOKEN)
 
 
+# ================== توابع کمکی ==================
 def clean_message(text: str) -> str:
+    """حذف منشن ربات و اسلش از متن پیام"""
     if not text:
         return ""
     text = re.sub(r"@\S+", "", text)
@@ -20,6 +22,7 @@ def clean_message(text: str) -> str:
 
 
 def is_group_chat(chat_id: str) -> bool:
+    """تشخیص چت گروهی"""
     if not chat_id:
         return False
     return str(chat_id).strip().lower().startswith("g")
@@ -27,10 +30,9 @@ def is_group_chat(chat_id: str) -> bool:
 
 async def get_user_role(chat_id: str, user_id: str) -> str:
     """
-    تشخیص نقش کاربر با استفاده از get_chat_member
+    تشخیص نقش واقعی کاربر با استفاده از فیلد status
     """
     try:
-        # دریافت اطلاعات کاربر در گروه
         member_info = await bot.get_chat_member(chat_id, user_id)
         print(f"🔍 MEMBER INFO: {member_info}", flush=True)
 
@@ -42,30 +44,38 @@ async def get_user_role(chat_id: str, user_id: str) -> str:
         if isinstance(member_info, dict) and "data" in member_info:
             data = member_info["data"]
 
-        # بررسی نقش
-        role = str(
-            data.get("role") or 
-            data.get("access") or 
-            data.get("member_type") or 
-            data.get("type") or 
-            data.get("permission") or 
-            ""
-        ).lower()
+        # استخراج chat_member
+        chat_member = data.get("chat_member", {}) if isinstance(data, dict) else {}
+        
+        # دریافت status (Creator / Admin / Member)
+        status = str(chat_member.get("status", "")).strip().lower()
+        
+        # دریافت access_list برای بررسی بیشتر
+        access_list = chat_member.get("access_list", [])
+        if not isinstance(access_list, list):
+            access_list = []
 
-        print(f"🔍 DETECTED ROLE: {role!r}", flush=True)
+        print(f"🔍 STATUS: {status!r} | ACCESS: {access_list}", flush=True)
 
-        if "owner" in role or "مالک" in role or "creator" in role:
+        # ============ تشخیص نقش ============
+        if status in ("creator", "owner"):
             return "مالک"
-        if "admin" in role or "ادمین" in role:
+        
+        if status in ("admin", "administrator"):
             return "ادمین"
-        if "member" in role or "عضو" in role:
+        
+        if status in ("member", "normal"):
             return "عضو"
 
-        # اگه هیچکدوم نبود، بررسی فیلدهای دیگه
-        if data.get("is_owner"):
-            return "مالک"
-        if data.get("is_admin"):
-            return "ادمین"
+        # اگه status خالی بود، از access_list استفاده کن
+        if access_list:
+            admin_permissions = [
+                "BanMember", "DeleteGlobalAllMessages", 
+                "EditMyMessages", "SendMessages", "ViewMembers"
+            ]
+            if any(perm in access_list for perm in ["BanMember", "DeleteGlobalAllMessages"]):
+                return "ادمین"
+            return "عضو"
 
         return "عضو"
 
@@ -74,9 +84,11 @@ async def get_user_role(chat_id: str, user_id: str) -> str:
         return "عضو"
 
 
+# ================== متغیر وضعیت ربات ==================
 bot_was_activated = False
 
 
+# ================== هندلر پیام‌ها ==================
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
     global bot_was_activated
@@ -88,11 +100,14 @@ async def handle_message(bot: Robot, message: Message):
 
         print(f"📩 MESSAGE | chat={chat_id} | raw={raw_text!r} | clean={clean_text!r}", flush=True)
 
+        # ============ فقط توی گروه کار کن ============
         if not is_group_chat(chat_id):
             return
 
+        # ============ دستور «فعال» ============
         if clean_text in ("فعال", "فاعل"):
             print("✅ ACTIVATE COMMAND", flush=True)
+
             if not bot_was_activated:
                 reply_text = "✅ ربات فعال شد."
                 bot_was_activated = True
@@ -108,8 +123,11 @@ async def handle_message(bot: Robot, message: Message):
             print(f"📤 SENT: {reply_text}", flush=True)
             return
 
+        # ============ دستور «مقام» ============
         if clean_text == "مقام":
             print("✅ RANK COMMAND", flush=True)
+
+            # دریافت نقش واقعی
             role = await get_user_role(chat_id, message.sender_id)
             reply_text = f"👤 مقام کاربر: {role}"
 
@@ -126,6 +144,7 @@ async def handle_message(bot: Robot, message: Message):
         print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
 
 
+# ================== اجرای ربات ==================
 async def main():
     print("🤖 RP GROUP MANAGER STARTING...", flush=True)
     try:
