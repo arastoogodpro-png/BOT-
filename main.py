@@ -1,38 +1,36 @@
 import os
 import time
-import asyncio
 
 from rubka import Robot, Message
 
 
 # =========================
-# تنظیمات
+# Token
 # =========================
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("❌ RUBIKA_TOKEN در Environment Variables پیدا نشد.")
+    raise RuntimeError("RUBIKA_TOKEN پیدا نشد.")
 
 
 # =========================
-# ساخت ربات
+# Bot
 # =========================
 
 bot = Robot(token=TOKEN)
 
 
 # =========================
-# دریافت تمام پیام‌ها
+# Message Handler
 # =========================
 
 @bot.on_message()
-async def handle_message(bot: Robot, message: Message):
+def handle_message(bot: Robot, message: Message):
 
     try:
         text = (message.text or "").strip()
 
-        # لاگ برای اینکه بفهمیم پیام واقعاً به ربات رسیده
         print(
             f"📩 MESSAGE RECEIVED | "
             f"chat_id={message.chat_id} | "
@@ -41,34 +39,41 @@ async def handle_message(bot: Robot, message: Message):
             flush=True
         )
 
-        # فقط برای تست
         if text == "فعال":
 
-            print("✅ فعال دریافت شد؛ پاسخ تا 5 ثانیه دیگر ارسال می‌شود.", flush=True)
+            print("✅ COMMAND فعال RECEIVED", flush=True)
 
-            await asyncio.sleep(5)
+            # پاسخ دقیقاً بعد از 5 ثانیه
+            time.sleep(5)
 
-            await message.reply(
-                "✅ ربات پیام «فعال» را دریافت کرد.\n"
-                "🤖 مسیر دریافت پیام درست کار می‌کند."
+            message.reply(
+                "✅ فعال شدم!\n"
+                "🤖 ربات پیام شما را دریافت کرد."
             )
 
-            print("📤 پاسخ ارسال شد.", flush=True)
+            print("📤 REPLY SENT", flush=True)
 
     except Exception as e:
-        print(f"❌ ERROR: {type(e).__name__}: {e}", flush=True)
+        print(
+            f"❌ HANDLER ERROR: {type(e).__name__}: {e}",
+            flush=True
+        )
 
 
 # =========================
-# شروع
+# Startup
 # =========================
 
-print("🤖 RP Group Manager TEST is starting...", flush=True)
+print("🤖 RP Group Manager TEST starting...", flush=True)
 
-# راه‌اندازی اولیه 30 ثانیه
+# 30 ثانیه زمان راه‌اندازی
 time.sleep(30)
 
-print("🚀 Bot is ready and listening for messages...", flush=True)
+print("🚀 BOT READY - LISTENING...", flush=True)
 
-# اجرای ربات
+
+# =========================
+# Run
+# =========================
+
 bot.run()
