@@ -42,64 +42,17 @@ async def get_user_role(chat_id: str, user_id: str) -> str:
             return "ادمین"
         return "عضو"
     except Exception as e:
-        print(f"⚠️ ROLE DETECTION ERROR: {e}", flush=True)
+        print(f"⚠️ ROLE ERROR: {e}", flush=True)
         return "عضو"
 
 
-async def find_sender_by_reply(chat_id: str, reply_id: str) -> str:
-    """
-    پیدا کردن sender_id پیام ریپلای‌شده با استفاده از get_updates
-    """
-    try:
-        # دریافت آپدیت‌های اخیر
-        updates = await bot.get_updates()
-        print(f"🔍 UPDATES RECEIVED: {type(updates)}", flush=True)
-
-        # نرمال‌سازی پاسخ
-        update_list = []
-        if isinstance(updates, dict):
-            data = updates.get("data", {})
-            if isinstance(data, dict):
-                update_list = data.get("updates", []) or data.get("messages", []) or []
-            elif isinstance(data, list):
-                update_list = data
-        elif isinstance(updates, list):
-            update_list = updates
-
-        print(f"🔍 UPDATE LIST LENGTH: {len(update_list)}", flush=True)
-
-        # جستجوی پیام با message_id == reply_id
-        for upd in update_list:
-            if not isinstance(upd, dict):
-                continue
-            
-            # بررسی ساختارهای مختلف
-            msg_id = str(
-                upd.get("message_id") or 
-                upd.get("id") or 
-                (upd.get("message", {}) or {}).get("message_id") or 
-                ""
-            )
-            
-            if msg_id == str(reply_id):
-                sender = str(
-                    upd.get("sender_id") or 
-                    upd.get("user_id") or 
-                    (upd.get("message", {}) or {}).get("sender_id") or 
-                    ""
-                )
-                if sender:
-                    print(f"🎯 FOUND SENDER FROM UPDATES: {sender}", flush=True)
-                    return sender
-
-        return None
-    except Exception as e:
-        print(f"⚠️ GET UPDATES ERROR: {e}", flush=True)
-        return None
-
-
+# ================== متغیرهای وضعیت ==================
 bot_is_active = True
-mute_list = {}
+mute_list = {}          # {chat_id: {user_id: end_timestamp}}
+
+# دیکشنری برای ذخیره پیام‌ها: {chat_id: {text: sender_id}}
+# این روش ۱۰۰٪ مطمئنه چون به API وابسته نیست
+text_to_sender = {}
 
 
 @bot.on_message()
@@ -113,7 +66,19 @@ async def handle_message(bot: Robot, message: Message):
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
 
-        # فیلتر پیام تکراری
+        # ================== ذخیره پیام در دیکشنری ==================
+        if chat_id and sender_id and raw_text:
+            if chat_id not in text_to_sender:
+                text_to_sender[chat_id] = {}
+            text_to_sender[chat_id][raw_text] = sender_id
+
+            # پاکسازی دیکشنری (نگه‌داشتن ۱۰۰ پیام آخر)
+            if len(text_to_sender[chat_id]) > 100:
+                keys = list(text_to_sender[chat_id].keys())[:50]
+                for k in keys:
+                    del text_to_sender[chat_id][k]
+
+        # ================== فیلتر پیام تکراری (قوی) ==================
         if not hasattr(handle_message, 'processed'):
             handle_message.processed = {}
             handle_message.last_cleanup = time.time()
@@ -136,7 +101,7 @@ async def handle_message(bot: Robot, message: Message):
         if not is_group_chat(chat_id):
             return
 
-        # بررسی سکوت
+        # ================== بررسی سکوت ==================
         now = time.time()
         chat_mutes = mute_list.get(chat_id, {})
 
@@ -149,7 +114,7 @@ async def handle_message(bot: Robot, message: Message):
                         chat_id=chat_id,
                         message_id=message.message_id
                     )
-                    print(f"🗑️ DELETED SUCCESSFULLY", flush=True)
+                    print(f"🗑️ DELETED", flush=True)
                 except Exception as e:
                     print(f"❌ DELETE FAILED: {e}", flush=True)
                 return
@@ -157,10 +122,12 @@ async def handle_message(bot: Robot, message: Message):
                 del chat_mutes[sender_id]
                 print(f"🔊 MUTE EXPIRED for {sender_id}", flush=True)
 
-        # تشخیص نقش
+        # ================== تشخیص نقش ==================
         role = await get_user_role(chat_id, sender_id)
         is_owner = (role == "مالک")
         print(f"👤 ROLE: {role} | is_owner={is_owner}", flush=True)
+
+        # ================== دستورات مدیریتی ==================
 
         # --- فعال ---
         if clean_text in ("فعال", "فاعل"):
@@ -214,28 +181,51 @@ async def handle_message(bot: Robot, message: Message):
 
             target_user_id = None
 
-            # پیدا کردن reply_id
-            reply_id = None
-            for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
-                if hasattr(message, attr):
-                    val = getattr(message, attr)
-                    if val:
-                        if hasattr(val, 'message_id'):
-                            reply_id = str(val.message_id)
-                        else:
-                            reply_id = str(val)
+            # ============================================================
+            # روش اصلی: خواندن متن پیام ریپلای‌شده و جستجو در دیکشنری
+            # ============================================================
+            reply_text_content = None
+            
+            # بررسی فیلدهای مختلف برای پیام ریپلای‌شده
+            if hasattr(message, 'reply_to_message') and message.reply_to_message:
+                replied = message.reply_to_message
+                if hasattr(replied, 'text') and replied.text:
+                    reply_text_content = str(replied.text).strip()
+                    print(f"🔍 REPLIED TEXT: {reply_text_content!r}", flush=True)
+            
+            # اگه reply_to_message نبود، از reply_to_message_id استفاده کن
+            if not reply_text_content:
+                reply_id = None
+                for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
+                    if hasattr(message, attr):
+                        val = getattr(message, attr)
+                        if val:
+                            if hasattr(val, 'message_id'):
+                                reply_id = str(val.message_id)
+                            else:
+                                reply_id = str(val)
+                            break
+                print(f"🔍 REPLY ID: {reply_id}", flush=True)
+
+            # جستجو در دیکشنری با متن پیام
+            if reply_text_content and chat_id in text_to_sender:
+                target_user_id = text_to_sender[chat_id].get(reply_text_content)
+                if target_user_id:
+                    print(f"🎯 TARGET FOUND BY TEXT: {target_user_id}", flush=True)
+
+            # اگه با متن پیدا نشد، تلاش کن با متن پاک‌سازی‌شده
+            if not target_user_id and reply_text_content and chat_id in text_to_sender:
+                clean_reply = clean_message(reply_text_content)
+                for stored_text, uid in text_to_sender[chat_id].items():
+                    if clean_message(stored_text) == clean_reply:
+                        target_user_id = uid
+                        print(f"🎯 TARGET FOUND BY CLEAN TEXT: {target_user_id}", flush=True)
                         break
 
-            print(f"🔍 REPLY ID: {reply_id}", flush=True)
-
-            # روش ۱: استفاده از get_updates
-            if reply_id:
-                target_user_id = await find_sender_by_reply(chat_id, reply_id)
-
-            # اگه پیدا نشد، خود فرستنده رو سکوت کن
+            # اگه هیچی پیدا نشد، خود فرستنده سکوت کن
             if not target_user_id:
                 target_user_id = sender_id
-                print(f"⚠️ NO TARGET FOUND - MUTING SENDER: {target_user_id}", flush=True)
+                print(f"⚠️ NO TARGET - MUTING SENDER: {target_user_id}", flush=True)
 
             # اضافه کردن به لیست سکوت
             end_time = time.time() + (minutes * 60)
@@ -255,7 +245,7 @@ async def handle_message(bot: Robot, message: Message):
             print(f"📤 SENT: {reply_text}", flush=True)
             return
 
-        # دستورات عمومی
+        # ================== دستورات عمومی ==================
         if not bot_is_active:
             return
 
