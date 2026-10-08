@@ -1,14 +1,13 @@
 import os
 import asyncio
 import traceback
-import time
 
 from rubka import Robot
 
 
-# =========================================
-# CONFIG
-# =========================================
+# ==========================================
+# TOKEN
+# ==========================================
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
@@ -16,82 +15,67 @@ if not TOKEN:
     raise RuntimeError("❌ RUBIKA_TOKEN پیدا نشد.")
 
 
-bot = Robot(
-    token=TOKEN,
-    retries=10,
-    retry_delay=3,
-    timeout=30,
-    safeSendMode=True,
-)
+# ==========================================
+# BOT
+# ==========================================
+
+bot = Robot(token=TOKEN)
 
 
-# =========================================
-# DUPLICATE PROTECTION
-# =========================================
+# ==========================================
+# جلوگیری از پردازش تکراری
+# ==========================================
 
-processed_messages = {}
-MAX_CACHE_SIZE = 500
+processed_ids = set()
+MAX_PROCESSED = 1000
 
 
-def already_processed(message_id):
-    if not message_id:
-        return True
-
+def was_processed(message_id):
     message_id = str(message_id)
 
-    # اگر قبلاً پردازش شده
-    if message_id in processed_messages:
+    if message_id in processed_ids:
         return True
 
-    processed_messages[message_id] = time.time()
+    processed_ids.add(message_id)
 
-    # تمیز کردن cache
-    if len(processed_messages) > MAX_CACHE_SIZE:
-        oldest = min(
-            processed_messages,
-            key=processed_messages.get
-        )
-        processed_messages.pop(oldest, None)
+    if len(processed_ids) > MAX_PROCESSED:
+        processed_ids.pop()
 
     return False
 
 
-# =========================================
-# SEND RESPONSE
-# =========================================
+# ==========================================
+# ارسال پیام
+# ==========================================
 
-async def send_response(chat_id, message_id):
-
+async def send_answer(chat_id):
     try:
+        # دقیقاً 5 ثانیه تأخیر
         await asyncio.sleep(5)
 
         result = await bot.send_message(
             chat_id=chat_id,
-            text="✅ ربات فعال است و پیام شما را دریافت کرد.",
-            reply_to_message_id=message_id
+            text="✅ ربات فعال است و پیام شما را دریافت کرد."
         )
 
         print(
-            f"📤 RESPONSE SENT | result={result}",
+            f"📤 MESSAGE SENT | chat={chat_id} | result={result}",
             flush=True
         )
 
     except Exception as e:
-
         print(
             f"❌ SEND ERROR: {type(e).__name__}: {e}",
             flush=True
         )
-
         traceback.print_exc()
 
 
-# =========================================
-# PROCESS UPDATE
-# =========================================
+# ==========================================
+# پردازش Update
+# ==========================================
 
 async def process_update(update):
-
     try:
 
         if not isinstance(update, dict):
@@ -99,28 +83,29 @@ async def process_update(update):
 
         update_type = update.get("type")
 
-        print(
-            f"🔔 UPDATE TYPE: {update_type}",
-            flush=True
-        )
-
         if update_type != "NewMessage":
             return
 
-        msg = update.get("new_message") or {}
+        new_message = update.get("new_message") or {}
+
+        if not isinstance(new_message, dict):
+            return
 
         chat_id = update.get("chat_id")
-        message_id = msg.get("message_id")
-        sender_id = msg.get("sender_id")
-        text = str(msg.get("text") or "").strip()
+        message_id = new_message.get("message_id")
+        sender_id = new_message.get("sender_id")
+
+        text = str(
+            new_message.get("text") or ""
+        ).strip()
 
         if not chat_id or not message_id:
             return
 
-        # جلوگیری از تکرار
-        if already_processed(message_id):
+        # جلوگیری از دوباره‌کاری
+        if was_processed(message_id):
             print(
-                f"⏭ DUPLICATE SKIPPED | message_id={message_id}",
+                f"⏭ DUPLICATE SKIPPED | {message_id}",
                 flush=True
             )
             return
@@ -134,7 +119,7 @@ async def process_update(update):
         )
 
         # فعال
-        # فاعل هم عمداً قبول می‌شود تا اشتباه تایپی باعث مشکل نشود
+        # فاعل هم پذیرفته می‌شود
         if text in ("فعال", "فاعل"):
 
             print(
@@ -143,26 +128,20 @@ async def process_update(update):
             )
 
             asyncio.create_task(
-                send_response(
-                    chat_id,
-                    message_id
-                )
+                send_answer(chat_id)
             )
 
     except Exception as e:
-
         print(
-            f"❌ PROCESS UPDATE ERROR: "
-            f"{type(e).__name__}: {e}",
+            f"❌ UPDATE ERROR: {type(e).__name__}: {e}",
             flush=True
         )
-
         traceback.print_exc()
 
 
-# =========================================
-# MAIN POLLING
-# =========================================
+# ==========================================
+# MAIN
+# ==========================================
 
 async def main():
 
@@ -171,32 +150,89 @@ async def main():
         flush=True
     )
 
-    # تست توکن
-    try:
+    # --------------------------------------
+    # بررسی توکن
+    # --------------------------------------
 
+    try:
         me = await bot.get_me()
 
+        if not isinstance(me, dict):
+            raise RuntimeError(
+                f"پاسخ getMe نامعتبر است: {me!r}"
+            )
+
+        if me.get("status") != "OK":
+            raise RuntimeError(
+                f"توکن معتبر نیست: {me!r}"
+            )
+
+        bot_info = (me.get("data") or {}).get("bot") or {}
+
         print(
-            f"✅ TOKEN OK | {me}",
+            f"✅ TOKEN OK | username={bot_info.get('username')}",
             flush=True
         )
 
     except Exception as e:
 
         print(
-            f"❌ GETME ERROR: "
-            f"{type(e).__name__}: {e}",
+            f"❌ GETME ERROR: {type(e).__name__}: {e}",
             flush=True
         )
 
         raise
 
+
+    # --------------------------------------
+    # تخلیه آپدیت‌های قدیمی
+    # --------------------------------------
+
     offset_id = None
 
+    try:
+
+        old_result = await bot.get_updates(
+            limit=100
+        )
+
+        if isinstance(old_result, dict):
+
+            old_data = old_result.get("data") or {}
+
+            offset_id = old_data.get(
+                "next_offset_id"
+            )
+
+            old_updates = old_data.get(
+                "updates"
+            ) or []
+
+            print(
+                f"🧹 OLD UPDATES SKIPPED: {len(old_updates)}",
+                flush=True
+            )
+
+    except Exception as e:
+
+        print(
+            f"⚠️ STARTUP GET_UPDATES ERROR: "
+            f"{type(e).__name__}: {e}",
+            flush=True
+        )
+
+        await asyncio.sleep(3)
+
+
+    # --------------------------------------
+    # شروع Polling
+    # --------------------------------------
+
     print(
-        "🚀 DIRECT POLLING STARTED",
+        "🚀 LISTENING FOR NEW MESSAGES...",
         flush=True
     )
+
 
     while True:
 
@@ -208,52 +244,61 @@ async def main():
             )
 
             if not isinstance(result, dict):
+
                 print(
-                    f"⚠️ INVALID RESPONSE: {result!r}",
+                    f"⚠️ INVALID API RESPONSE: {result!r}",
                     flush=True
                 )
 
                 await asyncio.sleep(3)
                 continue
 
+
             data = result.get("data") or {}
 
-            # بسیار مهم:
-            # Offset را جلو می‌بریم تا همان صف دوباره خوانده نشود
-            next_offset = data.get("next_offset_id")
+            # Offset جدید
+            next_offset_id = data.get(
+                "next_offset_id"
+            )
 
-            if next_offset:
-                offset_id = next_offset
+            if next_offset_id:
+                offset_id = next_offset_id
 
-            updates = data.get("updates") or []
+
+            updates = data.get(
+                "updates"
+            ) or []
+
 
             if updates:
 
                 print(
-                    f"📦 {len(updates)} UPDATES RECEIVED",
+                    f"📦 NEW UPDATES: {len(updates)}",
                     flush=True
                 )
 
                 for update in updates:
                     await process_update(update)
 
-            await asyncio.sleep(1)
+
+            await asyncio.sleep(0.5)
+
 
         except Exception as e:
 
             print(
-                f"⚠️ MAIN LOOP ERROR: "
+                f"⚠️ POLLING ERROR: "
                 f"{type(e).__name__}: {e}",
                 flush=True
             )
 
-            # خطای موقت مثل 502 باعث خاموش شدن نشود
+            # خطاهایی مثل 502 نباید ربات را خاموش کنند
             await asyncio.sleep(5)
 
 
-# =========================================
+# ==========================================
 # START
-# =========================================
+# ==========================================
 
 try:
 
@@ -269,19 +314,8 @@ except KeyboardInterrupt:
 except Exception as e:
 
     print(
-        f"❌ FATAL ERROR: "
-        f"{type(e).__name__}: {e}",
+        f"❌ FATAL ERROR: {type(e).__name__}: {e}",
         flush=True
     )
 
     traceback.print_exc()
-
-finally:
-
-    try:
-
-        if hasattr(bot, "close"):
-            asyncio.run(bot.close())
-
-    except Exception:
-        pass
