@@ -1,79 +1,102 @@
 import os
 import time
+import traceback
 
-from rubka import Robot, Message
-
-
-# =========================
-# Token
-# =========================
+from rubka import Robot
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("RUBIKA_TOKEN پیدا نشد.")
-
-
-# =========================
-# Bot
-# =========================
+    raise RuntimeError("RUBIKA_TOKEN تنظیم نشده است.")
 
 bot = Robot(token=TOKEN)
 
+print("🤖 TEST STARTING...", flush=True)
 
-# =========================
-# Message Handler
-# =========================
-
-@bot.on_message()
-def handle_message(bot: Robot, message: Message):
-
-    try:
-        text = (message.text or "").strip()
-
-        print(
-            f"📩 MESSAGE RECEIVED | "
-            f"chat_id={message.chat_id} | "
-            f"sender_id={message.sender_id} | "
-            f"text={text!r}",
-            flush=True
-        )
-
-        if text == "فعال":
-
-            print("✅ COMMAND فعال RECEIVED", flush=True)
-
-            # پاسخ دقیقاً بعد از 5 ثانیه
-            time.sleep(5)
-
-            message.reply(
-                "✅ فعال شدم!\n"
-                "🤖 ربات پیام شما را دریافت کرد."
-            )
-
-            print("📤 REPLY SENT", flush=True)
-
-    except Exception as e:
-        print(
-            f"❌ HANDLER ERROR: {type(e).__name__}: {e}",
-            flush=True
-        )
-
-
-# =========================
-# Startup
-# =========================
-
-print("🤖 RP Group Manager TEST starting...", flush=True)
-
-# 30 ثانیه زمان راه‌اندازی
+# راه‌اندازی 30 ثانیه‌ای
 time.sleep(30)
 
-print("🚀 BOT READY - LISTENING...", flush=True)
+print("🚀 DIRECT getUpdates TEST STARTED", flush=True)
 
+offset_id = None
 
-# =========================
-# Run
-# =========================
+while True:
+    try:
+        result = bot.get_updates(
+            offset_id=offset_id,
+            limit=100
+        )
 
-bot.run()
+        print(
+            "📥 RAW UPDATE RESPONSE:",
+            repr(result),
+            flush=True
+        )
+
+        if isinstance(result, dict):
+            data = result.get("data", {})
+
+            if isinstance(data, dict):
+                new_offset = data.get("next_offset_id")
+
+                if new_offset:
+                    offset_id = new_offset
+
+                updates = data.get("updates", [])
+
+                for update in updates:
+                    print(
+                        "🔔 UPDATE RECEIVED:",
+                        repr(update),
+                        flush=True
+                    )
+
+                    if update.get("type") != "NewMessage":
+                        continue
+
+                    chat_id = update.get("chat_id")
+                    msg = update.get("new_message", {})
+
+                    text = (msg.get("text") or "").strip()
+
+                    print(
+                        f"💬 MESSAGE: chat={chat_id} text={text!r}",
+                        flush=True
+                    )
+
+                    if text == "فعال" and chat_id:
+
+                        print(
+                            "✅ فعال RECEIVED - waiting 5 seconds...",
+                            flush=True
+                        )
+
+                        time.sleep(5)
+
+                        try:
+                            bot.send_message(
+                                chat_id,
+                                "✅ ربات پیام «فعال» را دریافت کرد."
+                            )
+
+                            print(
+                                "📤 RESPONSE SENT",
+                                flush=True
+                            )
+
+                        except Exception:
+                            print(
+                                "❌ SEND ERROR:",
+                                flush=True
+                            )
+                            traceback.print_exc()
+
+        time.sleep(1)
+
+    except Exception:
+        print(
+            "❌ GET UPDATES ERROR:",
+            flush=True
+        )
+        traceback.print_exc()
+        time.sleep(5)
