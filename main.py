@@ -31,6 +31,9 @@ BTN_USERS_TEXT = "👥 کاربران"
 BTN_GROUPS_TEXT = "🏠 گروه‌های فعال"
 MAX_FILTER_WORDS = 50
 
+CHANNEL_USERNAME = "@RPCITY_PHANTOM"
+PROMO_INTERVAL_SECONDS = 2 * 60 * 60  # هر 2 ساعت
+
 username_cache = {}
 
 
@@ -55,16 +58,13 @@ def ensure_list_dict(d, key, sub_key=None):
 
 
 async def schedule_delete(chat_id, message_id, delay_seconds):
-    """فقط برای پیام‌های اخطار"""
     async def _delete():
         try:
             await asyncio.sleep(delay_seconds)
             await bot.delete_message(chat_id=chat_id, message_id=message_id)
-            print(f"🗑️ DELETED msg={message_id} after {delay_seconds}s", flush=True)
-        except Exception as e:
-            print(f"⚠️ DELETE FAILED: {e}", flush=True)
+        except: pass
     try: asyncio.create_task(_delete())
-    except Exception as e: print(f"⚠️ TASK ERROR: {e}", flush=True)
+    except: pass
 
 
 def extract_message_id_from_result(result):
@@ -283,10 +283,12 @@ def load_data():
         "message_counts": {}, "join_dates": {}, "special_users": {}, "warnings": {},
         "warn_limit": {}, "warn_delete_after": {}, "started_users": [], "known_groups": [],
         "group_message_count": {}, "promo_sent": {}, "filtered_words": {}, "banned_users": {},
+        "last_promo_time": {},
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
             "profanity": True, "forward": False, "gif": False, "goodbye": False,
+            "auto_promo": True,
         },
     }
     for path in DATA_PATHS:
@@ -321,8 +323,10 @@ bot_is_active = True
 mute_list = {}
 bot_data = load_data()
 settings = bot_data.get("settings", {})
-for sk in ["link", "id", "spam", "hyperlink", "welcome", "warning", "filter", "auto_ban", "profanity", "forward", "gif", "goodbye"]:
+for sk in ["link", "id", "spam", "hyperlink", "welcome", "warning", "filter", "auto_ban", "profanity", "forward", "gif", "goodbye", "auto_promo"]:
     if sk not in settings: settings[sk] = False
+if "welcome" not in bot_data.get("settings", {}) or bot_data.get("settings", {}).get("welcome") is None:
+    settings["welcome"] = True
 message_cache = load_cache()
 spam_tracker = {}
 group_locks = {}
@@ -413,7 +417,6 @@ def get_warn_delete_after(chat_id):
 
 
 async def add_warning(chat_id, user_id, reason="", user_info=None):
-    """افزودن اخطار - فقط پیام اخطار پاک می‌شه"""
     try:
         if chat_id not in bot_data["warnings"]: bot_data["warnings"][chat_id] = {}
         if user_id not in bot_data["warnings"][chat_id]: bot_data["warnings"][chat_id][user_id] = 0
@@ -505,7 +508,16 @@ def build_chat_keypad():
 
 
 def get_channel_text():
-    return "📢 **کانال رسمی ربات FluxBot**\n\n➣ **@Fluxbot1**\n\n🌟 برای حمایت از ما لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
+    return (
+        "📢 **کانال رسمی ربات FluxBot**\n\n"
+        "➣ **@Fluxbot1**\n\n"
+        "🌟 برای حمایت از ما، دریافت آخرین اخبار،\n"
+        "به‌روزرسانی‌ها و آموزش‌های ویژه،\n"
+        "لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n"
+        "💎 **عضویت شما، انگیزه ما برای بهتر شدن است.**\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
 
 
 def get_help_text():
@@ -514,47 +526,62 @@ def get_help_text():
         "   ⚡ **FLUXBOT** ⚡\n"
         "   📚 راهنمای کامل ربات 📚\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
-        "👤 **دستورات کاربران:**\n"
-        "├ 👑 `مقام`\n"
-        "├ 📊 `پروفایل` / `آمار`\n"
-        "├ 🏆 `آمار گروه`\n"
-        "├ ⏰ `ساعت`\n"
-        "├ 🐺 `تنظیم اصل [نام]`\n"
-        "├ 🎭 `تنظیم لقب [نام]`\n"
-        "├ 😂 `جک` / `جوک`\n"
-        "├ 📜 `ضرب المثل`\n"
-        "├ 💡 `دانستی`\n"
-        "├ 🧠 `فکت`\n"
-        "├ 💚 `پ ن پ`\n"
-        "├ 📝 `شعر`\n"
-        "├ 🔮 `فال`\n"
-        "├ 🍀 `شانس`\n"
-        "├ 🎮 `لیست سرگرمی`\n"
-        "└ 📚 `راهنما`\n\n"
+        "👤 **دستورات کاربران (برای همه):**\n"
+        "├ 👑 `مقام` → نمایش مقام\n"
+        "├ 📊 `پروفایل` یا `آمار` → پروفایل کامل\n"
+        "├ 🏆 `آمار گروه` یا `تاپ` → برترین‌های امروز\n"
+        "├ ⏰ `ساعت` → نمایش ساعت و تاریخ\n"
+        "├ 🐺 `تنظیم اصل [نام]` → تنظیم اصل\n"
+        "├ 🎭 `تنظیم لقب [نام]` → تنظیم لقب\n"
+        "├ 😂 `جک` یا `جوک` → جوک رندوم\n"
+        "├ 📜 `ضرب المثل` → ضرب‌المثل\n"
+        "├ 💡 `دانستی` → دانستنی\n"
+        "├ 🧠 `فکت` → فکت علمی\n"
+        "├ 💚 `پ ن پ` → پند و اندرز\n"
+        "├ 📝 `شعر` → شعر رندوم\n"
+        "├ 🔮 `فال` → فال حافظ\n"
+        "├ 🍀 `شانس` → شانس امروز\n"
+        "├ 🎮 `لیست سرگرمی` → همه سرگرمی‌ها\n"
+        "└ 📚 `راهنما` → همین متن\n\n"
         "👑 **دستورات مالک / ویژه:**\n"
-        "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
-        "├ 🚫 `بن` / ✅ `انبن` (ریپلای)\n"
-        "├ 🔇 `سکوت [عدد]`\n"
-        "├ ⚠️ `اخطار` / ⚙️ `تنظیم اخطار [عدد]`\n"
-        "├ ⏱️ `حذف پیام اخطار [عدد]` (فقط اخطارها)\n"
-        "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
-        "├ 🚫 `فیلتر [کلمه]`\n"
+        "├ ✅ `فعال` → روشن کردن ربات\n"
+        "├ 🛑 `غیرفعال` → خاموش کردن (فقط مالک)\n"
+        "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
+        "├ ✅ `انبن` یا `آنبن` (ریپلای)\n"
+        "├ 🔇 `سکوت [عدد]` → سکوت (دقیقه)\n"
+        "├ ⚠️ `اخطار` (ریپلای) → اخطار دستی\n"
+        "├ ⚙️ `تنظیم اخطار [عدد]` → حد اخطار\n"
+        "├ ⏱️ `حذف پیام اخطار [عدد]` → حذف خودکار اخطار\n"
+        "│   مثال: `حذف پیام اخطار 10` → بعد 10 ثانیه\n"
+        "│   `حذف پیام اخطار 0` → غیرفعال\n"
+        "├ ⭐ `ویژه` (ریپلای) → ویژه کردن\n"
+        "├ ❌ `حذف ویژه` (ریپلای)\n"
+        "├ 🚫 `فیلتر [کلمه]` → افزودن کلمه\n"
+        "├ ❌ `حذف فیلتر [کلمه]`\n"
         "└ 📋 `لیست فیلتر`\n\n"
         "🗑️ **مدیریت پیام:**\n"
         "├ 🗑️ `حذف` (ریپلای) → حذف فوری\n"
-        "└ ⏱️ `حذف [عدد]` (ریپلای) → حذف بعد X دقیقه\n\n"
+        "└ ⏱️ `حذف [عدد]` (ریپلای) → حذف بعد X دقیقه\n"
+        "    مثال: `حذف 4` = 4 دقیقه\n"
+        "    مثال: `حذف 120` = 2 ساعت\n\n"
         "🔒 **قفل گروه:**\n"
-        "├ 🔒 `قفل گروه`\n"
-        "├ ⏱️ `قفل [عدد]` (ساعت)\n"
-        "├ ⏰ `قفل 13:00 14:00`\n"
-        "├ 🔓 `باز`\n"
-        "└ 📋 `لیست قفل گروه`\n\n"
+        "├ 🔒 `قفل گروه` → قفل دستی\n"
+        "├ ⏱️ `قفل [عدد]` → قفل موقت (ساعت)\n"
+        "├ ⏰ `قفل 13:00 14:00` → قفل روزانه\n"
+        "├ 🔓 `باز` → باز کردن قفل\n"
+        "├ 📋 `لیست قفل گروه` → وضعیت قفل‌ها\n"
+        "└ ❌ `حذف قفل زمان‌بندی`\n\n"
         "⚙️ **قفل‌ها (باز/بسته):**\n"
-        "├ 🔗 `لینک` / 🆔 `آیدی`\n"
-        "├ 📢 `اسپم` / 🔗 `هایپرلینک`\n"
-        "├ 🤬 `فحش` / 📨 `فوروارد`\n"
-        "├ 🎞️ `گیف` / 👋 `خداحافظی`\n"
-        "└ 📋 `لیست قفل`\n\n"
+        "├ 🔗 `لینک` → حذف لینک‌ها\n"
+        "├ 🆔 `آیدی` → حذف @username\n"
+        "├ 📢 `اسپم` → ضد اسپم\n"
+        "├ 🔗 `هایپرلینک` → حذف لینک مخفی\n"
+        "├ 🤬 `فحش` → حذف فحش‌ها\n"
+        "├ 📨 `فوروارد` یا `هدایت`\n"
+        "├ 🎞️ `گیف` → حذف گیف‌ها\n"
+        "├ 👋 `خداحافظی`\n"
+        "├ 👋 `خوش‌آمدگویی`\n"
+        "└ 📋 `لیست قفل` → وضعیت همه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **FLUXBOT** | جریان قدرت"
     )
@@ -562,12 +589,32 @@ def get_help_text():
 
 def get_users_text():
     count = len(ensure_list(bot_data.get("started_users", [])))
-    return f"👥 **کاربران:** {count}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+    return f"👥 **آمار کاربران**\n\n📊 تعداد: **{count}** کاربر\n\n⚡ **FLUXBOT**"
 
 
 def get_groups_text():
     count = len(ensure_list(bot_data.get("known_groups", [])))
-    return f"🏠 **گروه‌های فعال:** {count}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+    return f"🏠 **آمار گروه‌ها**\n\n📊 تعداد: **{count}** گروه\n\n⚡ **FLUXBOT**"
+
+
+def get_promo_text():
+    return (
+        "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+        "   ⚡ **FLUXBOT** ⚡\n"
+        "   🌊 جریان قدرت 🌊\n"
+        "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+        "💎 **از مدیریت حرفه‌ای لذت می‌برید؟**\n\n"
+        "🎁 برای حمایت از ما، دریافت آخرین اخبار،\n"
+        "به‌روزرسانی‌ها و آموزش‌های ویژه،\n"
+        "لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n"
+        "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+        "  📢 **کانال رسمی ما:**\n"
+        "  ➣ **@RPCITY_PHANTOM**\n"
+        "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+        "💖 **عضویت شما، انگیزه ما برای بهتر شدن است.**\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
 
 
 @bot.on_message()
@@ -626,7 +673,9 @@ async def handle_message(bot, message):
                 welcome_text = (
                     "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
                     "🌟 **به ربات مدیریتی FluxBot خوش آمدید!**\n\n"
-                    "👇 **از منوی پایین انتخاب کنید:**"
+                    "🤖 من یک ربات مدیریتی حرفه‌ای برای گروه‌های روبیکا هستم.\n"
+                    "با من می‌تونید گروهتون رو به بهترین شکل مدیریت کنید.\n\n"
+                    "👇 **از منوی پایین، یکی از گزینه‌ها رو انتخاب کنید:**"
                 )
                 keypad = build_chat_keypad()
                 if keypad:
@@ -660,7 +709,7 @@ async def handle_message(bot, message):
                 f"⏰ **ساعت فعلی**\n━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🕐 `{now.strftime('%H:%M:%S')}`\n"
                 f"📅 `{now.strftime('%Y/%m/%d')}`\n"
-                f"📆 {wd}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"))
+                f"📆 {wd}\n\n⚡ **FLUXBOT**"))
             return
 
         # حذف زمان‌بندی
@@ -690,7 +739,7 @@ async def handle_message(bot, message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=reply_id)
                 await bot.send_message(chat_id=message.chat_id, text="🗑️ **پیام حذف شد.**", reply_to_message_id=message.message_id)
-            except Exception as e: print(f"❌ DEL: {e}", flush=True)
+            except: pass
             return
 
         # باز کردن
@@ -775,21 +824,31 @@ async def handle_message(bot, message):
             bot_data["group_message_count"][chat_id] = 0
             save_data(bot_data)
             try:
-                await bot.send_message(chat_id=chat_id, text=(
-                    "⚡ **FLUXBOT**\n\n💎 برای حمایت به کانال ما بپیوندید:\n📢 **@Fluxbot1**"))
+                await bot.send_message(chat_id=chat_id, text=get_promo_text())
             except: pass
         else: save_data(bot_data)
 
         # خوش‌آمدگویی
-        if settings["welcome"] and bot_is_active:
+        if settings.get("welcome", True) and bot_is_active:
             welcomed = bot_data.get("welcomed_users", {}).get(chat_id, {})
             if sender_id not in welcomed:
                 chat_name = await get_chat_name(chat_id)
+                now_str = get_now_time()
                 try:
                     await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                        f"🌟 **به گروه {chat_name} خوش آمدید!**\n\n"
-                        f"👤 {display_name} عزیز، خوشحالیم که به ما پیوستید. 🌹\n\n"
-                        f"📚 `راهنما` رو بزنید برای دیدن دستورات.\n\n⚡ **FLUXBOT**"))
+                        f"╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+                        f"🌟 **به گروه {chat_name} خوش آمدید!** 🌟\n\n"
+                        f"👤 **{display_name} عزیز:**\nاز پیوستن شما بی‌نهایت خوشحالیم. 🌹\n\n"
+                        f"⏰ **زمان ورود:** {now_str}\n\n"
+                        f"💎 **امکانات FluxBot:**\n"
+                        f"├ 📊 `پروفایل` → پروفایل شما\n"
+                        f"├ 🐺 `تنظیم اصل [نام]`\n"
+                        f"├ 🎭 `تنظیم لقب [نام]`\n"
+                        f"├ 👑 `مقام`\n"
+                        f"├ ⏰ `ساعت`\n"
+                        f"├ 🎮 `لیست سرگرمی`\n"
+                        f"└ 📚 `راهنما`\n\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"))
                 except: pass
                 if chat_id not in bot_data["welcomed_users"]: bot_data["welcomed_users"][chat_id] = {}
                 bot_data["welcomed_users"][chat_id][sender_id] = True
@@ -858,7 +917,7 @@ async def handle_message(bot, message):
                 bot_data["banned_users"][chat_id][tgt] = time.time()
                 save_data(bot_data)
                 await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"🚫 **{td} اخراج شد!**")
-            except Exception as e: print(f"❌ BAN: {e}", flush=True)
+            except: pass
             return
 
         if is_command(clean_text, "انبن", "آنبن"):
@@ -878,7 +937,7 @@ async def handle_message(bot, message):
                     del bot_data["banned_users"][chat_id][tgt]
                     save_data(bot_data)
                 await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"✅ **{td} آنبن شد!**")
-            except Exception as e: print(f"❌ UNBAN: {e}", flush=True)
+            except: pass
             return
 
         fm = re.match(r"^فیلتر\s+(.+)$", clean_text)
@@ -888,7 +947,7 @@ async def handle_message(bot, message):
             if not w: return
             fl = ensure_list_dict(bot_data, "filtered_words", chat_id)
             if w in fl:
-                await bot.send_message(chat_id=message.chat_id, text=f"⚠️ از قبل فیلتر شده.", reply_to_message_id=message.message_id); return
+                await bot.send_message(chat_id=message.chat_id, text="⚠️ از قبل فیلتر شده.", reply_to_message_id=message.message_id); return
             if len(fl) >= MAX_FILTER_WORDS:
                 await bot.send_message(chat_id=message.chat_id, text=f"⚠️ حداکثر {MAX_FILTER_WORDS}", reply_to_message_id=message.message_id); return
             fl.append(w); save_data(bot_data)
@@ -903,7 +962,7 @@ async def handle_message(bot, message):
             if w in fl:
                 fl.remove(w); save_data(bot_data)
                 await bot.send_message(chat_id=message.chat_id, text=f"✅ «{w}» حذف شد.", reply_to_message_id=message.message_id)
-            else: await bot.send_message(chat_id=message.chat_id, text=f"⚠️ نبود.", reply_to_message_id=message.message_id)
+            else: await bot.send_message(chat_id=message.chat_id, text="⚠️ نبود.", reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "لیست فیلتر"):
@@ -918,15 +977,15 @@ async def handle_message(bot, message):
         if is_command(clean_text, "جک", "جوک"):
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"😂 **جوک:**\n\n{random.choice(JOKES)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "ضرب المثل"):
-            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"📜 {random.choice(PROVERBS)}\n\n⚡ **FLUXBOT**"); return
+            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"📜 **ضرب‌المثل:**\n\n{random.choice(PROVERBS)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "دانستی"):
-            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"💡 {random.choice(TRIVIA)}\n\n⚡ **FLUXBOT**"); return
+            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"💡 **دانستی:**\n\n{random.choice(TRIVIA)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "فکت"):
-            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"🧠 {random.choice(FACTS)}\n\n⚡ **FLUXBOT**"); return
+            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"🧠 **فکت:**\n\n{random.choice(FACTS)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "پ ن پ"):
-            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"💚 {random.choice(PNP)}\n\n⚡ **FLUXBOT**"); return
+            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"💚 **پند:**\n\n{random.choice(PNP)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "شعر"):
-            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"📝 {random.choice(POEMS)}\n\n⚡ **FLUXBOT**"); return
+            await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"📝 **شعر:**\n\n{random.choice(POEMS)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "فال"):
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id, text=f"{random.choice(FAL)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "شانس"):
@@ -1056,7 +1115,7 @@ async def handle_message(bot, message):
                 f"🆔 آیدی: {st(settings['id'])}\n"
                 f"📢 اسپم: {st(settings['spam'])}\n"
                 f"🔗 هایپرلینک: {st(settings['hyperlink'])}\n"
-                f"👋 خوش‌آمد: {st(settings['welcome'])}\n"
+                f"👋 خوش‌آمد: {st(settings.get('welcome', True))}\n"
                 f"🤬 فحش: {st(settings.get('profanity', True))}\n"
                 f"📨 فوروارد: {st(settings.get('forward', False))}\n"
                 f"🎞️ گیف: {st(settings.get('gif', False))}\n"
@@ -1066,7 +1125,7 @@ async def handle_message(bot, message):
                 f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n\n⚡ **FLUXBOT**"))
             return
 
-        if is_command(clean_text, "راهنما", "help", "دستورات"):
+        if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands"):
             await bot.send_message(chat_id=message.chat_id, text=get_help_text(), reply_to_message_id=message.message_id)
             return
 
@@ -1077,7 +1136,7 @@ async def handle_message(bot, message):
             tl = ensure_list_dict(bot_data, "taken_asl", chat_id)
             ca = bot_data["user_titles"].get(chat_id, {}).get(sender_id, {}).get("asl")
             if av in tl and av != ca:
-                await bot.send_message(chat_id=message.chat_id, text=f"❌ تکراری", reply_to_message_id=message.message_id); return
+                await bot.send_message(chat_id=message.chat_id, text="❌ تکراری", reply_to_message_id=message.message_id); return
             if chat_id not in bot_data["user_titles"]: bot_data["user_titles"][chat_id] = {}
             if sender_id not in bot_data["user_titles"][chat_id]: bot_data["user_titles"][chat_id][sender_id] = {}
             if ca and ca in tl: tl.remove(ca)
@@ -1094,7 +1153,7 @@ async def handle_message(bot, message):
             tl = ensure_list_dict(bot_data, "taken_laghab", chat_id)
             cl = bot_data["user_titles"].get(chat_id, {}).get(sender_id, {}).get("laghab")
             if lv in tl and lv != cl:
-                await bot.send_message(chat_id=message.chat_id, text=f"❌ تکراری", reply_to_message_id=message.message_id); return
+                await bot.send_message(chat_id=message.chat_id, text="❌ تکراری", reply_to_message_id=message.message_id); return
             if chat_id not in bot_data["user_titles"]: bot_data["user_titles"][chat_id] = {}
             if sender_id not in bot_data["user_titles"][chat_id]: bot_data["user_titles"][chat_id][sender_id] = {}
             if cl and cl in tl: tl.remove(cl)
@@ -1208,9 +1267,47 @@ async def handle_message(bot, message):
         print(f"❌ ERROR: {type(e).__name__}: {e}", flush=True)
 
 
+# ================== تسک تبلیغ خودکار هر 2 ساعت ==================
+async def auto_promo_task():
+    """هر 2 ساعت یه بار تبلیغ به همه گروه‌ها می‌فرسته"""
+    print("⏰ AUTO PROMO TASK STARTED (every 2 hours)", flush=True)
+    await asyncio.sleep(60)  # 1 دقیقه بعد از استارت صبر کن
+    while True:
+        try:
+            if not bot_data.get("settings", {}).get("auto_promo", True):
+                await asyncio.sleep(300)
+                continue
+
+            groups = ensure_list(bot_data.get("known_groups", []))
+            print(f"📢 AUTO PROMO | groups={len(groups)}", flush=True)
+
+            for gid in groups:
+                try:
+                    await bot.send_message(chat_id=gid, text=get_promo_text())
+                    print(f"✅ PROMO SENT TO {gid}", flush=True)
+                    await asyncio.sleep(1.5)  # بین گروه‌ها 1.5 ثانیه صبر
+                except Exception as e:
+                    print(f"⚠️ PROMO FAILED {gid}: {e}", flush=True)
+
+            bot_data["last_promo_time"] = {"time": time.time()}
+            save_data(bot_data)
+            print(f"💤 AUTO PROMO SLEEP {PROMO_INTERVAL_SECONDS}s", flush=True)
+            await asyncio.sleep(PROMO_INTERVAL_SECONDS)
+        except Exception as e:
+            print(f"❌ AUTO PROMO ERROR: {e}", flush=True)
+            await asyncio.sleep(60)
+
+
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"🌍 TIMEZONE: Iran (UTC+3:30)", flush=True)
+    print(f"📢 CHANNEL: {CHANNEL_USERNAME}", flush=True)
+    print(f"⏰ PROMO INTERVAL: {PROMO_INTERVAL_SECONDS}s (2 hours)", flush=True)
+    # تسک تبلیغ خودکار رو راه اندازی کن
+    try:
+        asyncio.create_task(auto_promo_task())
+    except Exception as e:
+        print(f"⚠️ PROMO TASK START ERROR: {e}", flush=True)
     try:
         await bot.run()
     except Exception as e:
