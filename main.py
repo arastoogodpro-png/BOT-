@@ -1,49 +1,32 @@
 import os
 import asyncio
-
-from rubka import Robot, Message
-
+from rubka import Robot
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("RUBIKA_TOKEN پیدا نشد.")
+    raise RuntimeError("RUBIKA_TOKEN پیدا نشد")
 
+bot = Robot(
+    token=TOKEN,
+    retries=10,
+    retry_delay=3,
+    timeout=30
+)
 
-bot = Robot(token=TOKEN)
+async def test():
+    print("🤖 TEST START", flush=True)
 
-
-@bot.on_message()
-async def handle_message(bot: Robot, message: Message):
     try:
-        text = (message.text or "").strip()
-
-        print(
-            f"📩 MESSAGE RECEIVED | "
-            f"chat={message.chat_id} | "
-            f"sender={message.sender_id} | "
-            f"text={text!r}",
-            flush=True
-        )
-
-        if text == "فعال":
-            print("✅ فعال دریافت شد", flush=True)
-
-            await asyncio.sleep(5)
-
-            await message.reply(
-                "✅ فعال شدم!\n"
-                "🤖 پیام شما با موفقیت دریافت شد."
-            )
-
-            print("📤 RESPONSE SENT", flush=True)
-
+        me = await bot.get_me()
+        print("✅ getMe:", me, flush=True)
     except Exception as e:
-        print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
+        print("❌ getMe ERROR:", repr(e), flush=True)
 
+    try:
+        updates = await bot.get_updates(limit=10)
+        print("✅ getUpdates:", updates, flush=True)
+    except Exception as e:
+        print("❌ getUpdates ERROR:", repr(e), flush=True)
 
-print("🤖 RP GROUP MANAGER STARTING...", flush=True)
-
-print("🚀 BOT STARTING...", flush=True)
-
-bot.run()
+asyncio.run(test())
