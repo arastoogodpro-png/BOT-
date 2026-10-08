@@ -4,7 +4,6 @@ import json
 import time
 import asyncio
 import random
-import urllib.request
 from datetime import datetime
 from rubka import Robot, Message
 from rubka.keypad import ChatKeypadBuilder
@@ -15,7 +14,6 @@ if not TOKEN:
 
 bot = Robot(token=TOKEN)
 
-# ================== ذخیره‌سازی ==================
 DATA_PATHS = ["/app/bot_data.json", "/app/data/bot_data.json", "/tmp/bot_data.json", "./bot_data.json"]
 CACHE_PATHS = ["/app/message_cache.json", "/app/data/message_cache.json", "/tmp/message_cache.json", "./message_cache.json"]
 
@@ -26,6 +24,33 @@ BTN_GROUPS_TEXT = "🏠 گروه‌های فعال"
 MAX_FILTER_WORDS = 50
 
 username_cache = {}
+
+
+# ================== تابع کمکی حیاتی (رفع باگ) ==================
+def ensure_list(value):
+    """اطمینان از اینکه مقدار یک لیست است. اگه دیکشنری بود، به لیست تبدیل می‌کند."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return list(value.keys()) if value else []
+    if isinstance(value, str):
+        return [value] if value else []
+    return []
+
+
+def ensure_list_dict(d, key, sub_key=None):
+    """اطمینان از لیست بودن دیکشنری داخلی"""
+    if key not in d:
+        d[key] = []
+        return d[key]
+    if sub_key is not None:
+        if sub_key not in d[key]:
+            d[key][sub_key] = []
+        d[key][sub_key] = ensure_list(d[key][sub_key])
+        return d[key][sub_key]
+    d[key] = ensure_list(d[key])
+    return d[key]
+
 
 # ================== فحش‌ها ==================
 PROFANITY_LIST = [
@@ -42,10 +67,9 @@ PROFANITY_LIST = [
     "خارکسه","خوارکسده","گوزو","گوزیدن","عنین","پدرسگ","مادرجنده","کیرخوری",
     "کصلیسی","جاکشی","دیوثی","خانجی","ابلهی","نادانی","جاهلی","منافقی","دروغگویی",
     "خیانت","فاحشه","فاحشگی","روسپی","لجنی","کثیفی","پلیدی","خباثت","شرارت","رذالت",
-    "فرومایه","سفالت","نکبتی","شوربخت","بدبختی","سیه بخت","تیره بخت","بدطینت","بدسرشت",
 ]
 
-# ================== جوک‌ها (۱۰+ متن) ==================
+# ================== سرگرمی‌ها ==================
 JOKES = [
     "به یارو میگن چرا زنتو میزنی؟ میگه چون عاشقشم! 😂",
     "رفتم دکتر گفتم آدم‌ها رو دوست ندارم! گفت پس چرا اومدی؟ گفتم تو که آدم نیستی! 😅",
@@ -59,11 +83,8 @@ JOKES = [
     "از یارو پرسیدن چرا همیشه دیر میای؟ گفت چون همیشه میگم یه دقیقه دیگه! ⏰",
     "به یارو میگن چرا با ماشینت تصادف کردی؟ گفت راننده مقابلم هم مثل من فکر می‌کرد! 🚗",
     "از یارو پرسیدن چرا گوشیت شارژ تموم می‌کنه؟ گفت چون همش باهاش حرف می‌زنم! 📱",
-    "به یارو میگن چرا منزلتون تمیز نیست؟ گفت شرمنده در حال بازسازی هستیم! 🏠",
-    "از یارو پرسیدن چرا ریشات اینقدر بلنده؟ گفت مامانم میگه قیچی گم شده! ✂️",
 ]
 
-# ================== ضرب‌المثل‌ها (۱۰+ متن) ==================
 PROVERBS = [
     "آب که از سر گذشت، چه یک وجب چه صد وجب. 🌊",
     "از این ستون به آن ستون فرج است. 🕌",
@@ -82,7 +103,6 @@ PROVERBS = [
     "دو صد گفته چون نیم کردار نیست. 💬",
 ]
 
-# ================== دانستنی‌ها (۱۰+ متن) ==================
 TRIVIA = [
     "🐙 اختاپوس‌ها سه قلب دارند و خونشان آبی است.",
     "🍯 عسل هرگز فاسد نمی‌شود. عسل ۳۰۰۰ ساله مصری هنوز خوراکی است.",
@@ -94,11 +114,8 @@ TRIVIA = [
     "🌍 زمین در هر ثانیه حدود ۳۰ کیلومتر به دور خورشید می‌چرخد.",
     "🐝 زنبورها با رقص، به همدیگر محل گل‌ها را نشان می‌دهند.",
     "🦋 پروانه‌ها با پاهایشان مزه می‌کنند!",
-    "🌞 نور خورشید ۸ دقیقه و ۲۰ ثانیه طول می‌کشد تا به زمین برسد.",
-    "🐳 قلب نهنگ آبی به اندازه یک ماشین کوچک است.",
 ]
 
-# ================== فکت‌ها (۱۰+ متن) ==================
 FACTS = [
     "🧠 مغز انسان ۲٪ وزن بدن را دارد اما ۲۰٪ انرژی مصرف می‌کند!",
     "🦷 مینای دندان سخت‌ترین ماده در بدن انسان است.",
@@ -110,10 +127,8 @@ FACTS = [
     "🧬 DNA انسان ۹۹.۹٪ با شامپانزه‌ها مشترک است!",
     "🦴 نوزادان با ۳۰۰ استخوان به دنیا می‌آیند، بزرگسالان ۲۰۶ استخوان دارند.",
     "👅 زبان انسان ۱۰ هزار جوانه چشایی دارد.",
-    "🦶 پاهای انسان حدود ۱۰۰ هزار کیلومتر در طول عمر راه می‌رود!",
 ]
 
-# ================== پ ن پ (پند و اندرز) ==================
 PNP = [
     "پند: با دلِ خودت روراست باش، حتی اگر به ضررت باشه. 💚",
     "پند: هرگز قضاوت نکن تا خودت در اون موقعیت قرار نگیری. ⚖️",
@@ -125,11 +140,8 @@ PNP = [
     "پند: به کسی که پشت سرت حرف می‌زنه، پشت سرش حرف نزن. 🤫",
     "پند: پول همه چیز نیست، ولی نداشتنش خیلی چیزها رو سخت می‌کنه. 💰",
     "پند: احترام به پدر و مادر، کلید خوشبختیه. 🙏",
-    "پند: با هر کسی که می‌خندی، بهش اعتماد نکن. 🎭",
-    "پند: هر چی بکاری، همون رو درو می‌کنی. 🌱",
 ]
 
-# ================== شعرهای کوتاه ==================
 POEMS = [
     "دوش دیدم که ملائک در میخانه زدند / گل آدم بسرشتند و به پیمانه زدند. 🍷",
     "بنی آدم اعضای یک پیکرند / که در آفرینش ز یک گوهرند. 🤝",
@@ -138,7 +150,6 @@ POEMS = [
     "درخت دوستی بنشان که کام دل به بار آرد / نهال دشمنی برکن که رنج بی‌شمار آرد. 🌳",
 ]
 
-# ================== فال‌ها ==================
 FAL = [
     "🔮 **فال امروز:** روز خوبی در انتظارته. یه خبر خوش بهت می‌رسه! 🍀",
     "🔮 **فال امروز:** مراقب باش، یه نفر داره پشت سرت حرف می‌زنه. 🤫",
@@ -148,7 +159,6 @@ FAL = [
     "🔮 **فال امروز:** امروز روز موفقیته، پس تنبلی نکن! 💪",
 ]
 
-# ================== شانس ==================
 LUCK = [
     "🍀 **شانس امروز:** ۱۰ از ۱۰! فوق‌العاده‌ست!",
     "🍀 **شانس امروز:** ۹ از ۱۰! عالیه!",
@@ -160,7 +170,7 @@ LUCK = [
 ]
 
 
-# ================== توابع کمکی ==================
+# ================== توابع کمکی عمومی ==================
 def clean_message(text):
     if not text:
         return ""
@@ -278,7 +288,7 @@ def load_data():
     default_data = {
         "welcomed_users": {}, "user_titles": {}, "taken_asl": {}, "taken_laghab": {},
         "message_counts": {}, "join_dates": {}, "special_users": {}, "warnings": {},
-        "warn_limit": {}, "started_users": [], "known_groups": {},
+        "warn_limit": {}, "started_users": [], "known_groups": [],
         "group_message_count": {}, "promo_sent": {}, "filtered_words": {},
         "banned_users": {},
         "settings": {"link": False, "id": False, "spam": False, "hyperlink": False,
@@ -290,10 +300,13 @@ def load_data():
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
+                    # اطمینان از لیست بودن فیلدهای حیاتی
+                    for list_key in ["started_users", "known_groups"]:
+                        if list_key in loaded:
+                            loaded[list_key] = ensure_list(loaded[list_key])
                     for k, v in default_data.items():
                         if k not in loaded:
                             loaded[k] = v
-                    # اطمینان از وجود کلید profanity در settings
                     if "settings" in loaded and "profanity" not in loaded["settings"]:
                         loaded["settings"]["profanity"] = True
                     return loaded
@@ -380,7 +393,6 @@ def contains_profanity(text):
 
 
 def get_remaining_time(end_time):
-    """محاسبه زمان باقی‌مانده"""
     diff = end_time - time.time()
     if diff <= 0:
         return "0 ثانیه"
@@ -440,16 +452,30 @@ async def add_warning(chat_id, user_id, reason=""):
 
 
 def register_user(user_id):
-    if user_id and user_id not in bot_data["started_users"]:
-        bot_data["started_users"].append(user_id)
-        save_data(bot_data)
+    try:
+        if not user_id:
+            return
+        # اطمینان حیاتی از لیست بودن
+        if not isinstance(bot_data.get("started_users"), list):
+            bot_data["started_users"] = ensure_list(bot_data.get("started_users"))
+        if user_id not in bot_data["started_users"]:
+            bot_data["started_users"].append(user_id)
+            save_data(bot_data)
+    except Exception as e:
+        print(f"⚠️ REGISTER USER ERROR: {e}", flush=True)
 
 
 def register_group(chat_id):
-    if user_id_check := chat_id:
+    try:
+        if not chat_id:
+            return
+        if not isinstance(bot_data.get("known_groups"), list):
+            bot_data["known_groups"] = ensure_list(bot_data.get("known_groups"))
         if chat_id not in bot_data["known_groups"]:
             bot_data["known_groups"].append(chat_id)
             save_data(bot_data)
+    except Exception as e:
+        print(f"⚠️ REGISTER GROUP ERROR: {e}", flush=True)
 
 
 # ================== کیبورد ==================
@@ -478,11 +504,13 @@ def get_help_text():
 
 
 def get_users_text():
-    return f"👥 **آمار کاربران FluxBot**\n\n📊 **تعداد کاربران استارت‌زده:**\n└ **{len(bot_data.get('started_users', []))}** کاربر\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
+    count = len(ensure_list(bot_data.get("started_users", [])))
+    return f"👥 **آمار کاربران FluxBot**\n\n📊 **تعداد کاربران استارت‌زده:**\n└ **{count}** کاربر\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
 
 
 def get_groups_text():
-    return f"🏠 **آمار گروه‌های فعال FluxBot**\n\n📊 **تعداد گروه‌های فعال:**\n└ **{len(bot_data.get('known_groups', []))}** گروه\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
+    count = len(ensure_list(bot_data.get("known_groups", [])))
+    return f"🏠 **آمار گروه‌های فعال FluxBot**\n\n📊 **تعداد گروه‌های فعال:**\n└ **{count}** گروه\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
 
 
 # ================== هندلر پیام‌ها ==================
@@ -598,17 +626,14 @@ async def handle_message(bot, message):
         if sender_id in chat_mutes:
             end_time = chat_mutes[sender_id]
             if now < end_time:
-                # کاربر سکوت‌شده - پیام پاک بشه + پیام هشدار
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 except Exception as e:
                     print(f"❌ DELETE MUTED: {e}", flush=True)
-
                 u_info = await get_user_info(chat_id, sender_id)
                 u_display = format_user_display(u_info, sender_id)
                 remaining = get_remaining_time(end_time)
                 end_dt = datetime.fromtimestamp(end_time).strftime("%H:%M")
-
                 try:
                     await bot.send_message(chat_id=chat_id, text=(
                         f"🔇 **کاربر گرامی {u_display}**\n\n"
@@ -616,8 +641,7 @@ async def handle_message(bot, message):
                         f"⏳ **زمان باقی‌مانده:** `{remaining}`\n"
                         f"🕐 **پایان سکوت:** `{end_dt}`\n\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"⚡ **FLUXBOT** | جریان قدرت"
-                    ))
+                        f"⚡ **FLUXBOT** | جریان قدرت"))
                 except:
                     pass
                 return
@@ -630,8 +654,6 @@ async def handle_message(bot, message):
         is_owner = (role == "مالک")
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner or is_special
-
-        print(f"👤 ROLE: {role} | is_owner={is_owner} | special={is_special}", flush=True)
 
         # خوش‌آمدگویی
         if settings["welcome"] and bot_is_active:
@@ -710,7 +732,6 @@ async def handle_message(bot, message):
                     f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"))
             except Exception as e:
                 print(f"❌ BAN ERROR: {e}", flush=True)
-                await bot.send_message(chat_id=message.chat_id, text=f"❌ خطا: {e}", reply_to_message_id=message.message_id)
             return
 
         # --- انبن ---
@@ -738,10 +759,9 @@ async def handle_message(bot, message):
                     f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"))
             except Exception as e:
                 print(f"❌ UNBAN ERROR: {e}", flush=True)
-                await bot.send_message(chat_id=message.chat_id, text=f"❌ خطا: {e}", reply_to_message_id=message.message_id)
             return
 
-        # --- فیلتر کلمه ---
+        # --- فیلتر ---
         filter_match = re.match(r"^فیلتر\s+(.+)$", clean_text)
         if filter_match:
             if not is_owner:
@@ -750,18 +770,18 @@ async def handle_message(bot, message):
             if not word:
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ یک کلمه وارد کنید.", reply_to_message_id=message.message_id)
                 return
-            if chat_id not in bot_data["filtered_words"]:
-                bot_data["filtered_words"][chat_id] = []
-            if word in bot_data["filtered_words"][chat_id]:
+            # اطمینان از لیست بودن
+            fw_list = ensure_list_dict(bot_data, "filtered_words", chat_id)
+            if word in fw_list:
                 await bot.send_message(chat_id=message.chat_id, text=f"⚠️ کلمه «{word}» از قبل فیلتر شده.", reply_to_message_id=message.message_id)
                 return
-            if len(bot_data["filtered_words"][chat_id]) >= MAX_FILTER_WORDS:
+            if len(fw_list) >= MAX_FILTER_WORDS:
                 await bot.send_message(chat_id=message.chat_id, text=f"⚠️ حداکثر {MAX_FILTER_WORDS} کلمه.", reply_to_message_id=message.message_id)
                 return
-            bot_data["filtered_words"][chat_id].append(word)
+            fw_list.append(word)
             save_data(bot_data)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"✅ **کلمه فیلتر شد!**\n\n🚫 کلمه: `{word}`\n📊 تعداد: {len(bot_data['filtered_words'][chat_id])}/{MAX_FILTER_WORDS}")
+                text=f"✅ **کلمه فیلتر شد!**\n\n🚫 کلمه: `{word}`\n📊 تعداد: {len(fw_list)}/{MAX_FILTER_WORDS}")
             return
 
         unfilter_match = re.match(r"^حذف\s+فیلتر\s+(.+)$", clean_text)
@@ -769,8 +789,9 @@ async def handle_message(bot, message):
             if not is_owner:
                 return
             word = unfilter_match.group(1).strip()
-            if chat_id in bot_data["filtered_words"] and word in bot_data["filtered_words"][chat_id]:
-                bot_data["filtered_words"][chat_id].remove(word)
+            fw_list = ensure_list_dict(bot_data, "filtered_words", chat_id)
+            if word in fw_list:
+                fw_list.remove(word)
                 save_data(bot_data)
                 await bot.send_message(chat_id=message.chat_id, text=f"✅ کلمه «{word}» حذف شد.", reply_to_message_id=message.message_id)
             else:
@@ -780,7 +801,7 @@ async def handle_message(bot, message):
         if is_command(clean_text, "لیست فیلتر", "فیلترها"):
             if not can_manage:
                 return
-            words = bot_data["filtered_words"].get(chat_id, [])
+            words = ensure_list_dict(bot_data, "filtered_words", chat_id)
             if not words:
                 text = "📋 **لیست فیلتر خالی است.**"
             else:
@@ -791,54 +812,45 @@ async def handle_message(bot, message):
 
         # ============ سرگرمی‌ها ============
         if is_command(clean_text, "جک", "جوک"):
-            joke = random.choice(JOKES)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"😂 **جوک امروز:**\n\n{joke}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"😂 **جوک امروز:**\n\n{random.choice(JOKES)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "ضرب المثل", "ضرب‌المثل"):
-            proverb = random.choice(PROVERBS)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"📜 **ضرب‌المثل:**\n\n{proverb}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"📜 **ضرب‌المثل:**\n\n{random.choice(PROVERBS)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "دانستی", "دانستنی", "میدونستی"):
-            trivia = random.choice(TRIVIA)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"💡 **دانستنی:**\n\n{trivia}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"💡 **دانستنی:**\n\n{random.choice(TRIVIA)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "فکت", "fact"):
-            fact = random.choice(FACTS)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"🧠 **فکت علمی:**\n\n{fact}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"🧠 **فکت علمی:**\n\n{random.choice(FACTS)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "پ ن پ", "پنپ", "پند"):
-            pnp = random.choice(PNP)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"💚 **پند و اندرز:**\n\n{pnp}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"💚 **پند و اندرز:**\n\n{random.choice(PNP)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "شعر", "شعر بگو"):
-            poem = random.choice(POEMS)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"📝 **شعر:**\n\n{poem}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"📝 **شعر:**\n\n{random.choice(POEMS)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "فال", "فال حافظ"):
-            fal = random.choice(FAL)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"{fal}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"{random.choice(FAL)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
         if is_command(clean_text, "شانس", "شانس من"):
-            luck = random.choice(LUCK)
             await bot.send_message(chat_id=message.chat_id, reply_to_message_id=message.message_id,
-                text=f"{luck}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
+                text=f"{random.choice(LUCK)}\n\n━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت")
             return
 
-        # لیست سرگرمی‌ها
         if is_command(clean_text, "لیست سرگرمی", "سرگرمی‌ها", "سرگرمی"):
             text = (
                 "🎮 **لیست سرگرمی‌های FluxBot**\n"
@@ -974,7 +986,7 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=message.chat_id, text="⚠️ کاربر در لیست ویژه نبود.", reply_to_message_id=message.message_id)
             return
 
-        # قفل‌ها (شامل فحش)
+        # قفل‌ها
         feature_match = re.match(r"^(لینک|آیدی|اسپم|هایپرلینک|خوش‌آمدگویی|خوش‌امدگویی|فحش)\s+(باز|بسته)$", clean_text)
         if feature_match:
             if not can_manage:
@@ -1002,7 +1014,7 @@ async def handle_message(bot, message):
             def st(v): return "🔴 بسته" if v else "🟢 باز"
             warn_limit = bot_data["warn_limit"].get(chat_id, 3)
             warn_status = "🔴 فعال" if settings["warning"] else "🟢 غیرفعال"
-            filter_count = len(bot_data["filtered_words"].get(chat_id, []))
+            filter_count = len(ensure_list_dict(bot_data, "filtered_words", chat_id))
             reply_text = (
                 "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   📋 وضعیت قفل‌ها 📋\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
                 f"🔗 **لینک:** {st(settings['link'])}\n"
@@ -1068,10 +1080,9 @@ async def handle_message(bot, message):
             if not asl_value:
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ مقدار اصل را وارد کنید.", reply_to_message_id=message.message_id)
                 return
-            if chat_id not in bot_data["taken_asl"]:
-                bot_data["taken_asl"][chat_id] = []
+            taken_list = ensure_list_dict(bot_data, "taken_asl", chat_id)
             current_asl = bot_data["user_titles"].get(chat_id, {}).get(sender_id, {}).get("asl")
-            if asl_value in bot_data["taken_asl"][chat_id] and asl_value != current_asl:
+            if asl_value in taken_list and asl_value != current_asl:
                 await bot.send_message(chat_id=message.chat_id, text=f"❌ اصل «{asl_value}» تکراری است.", reply_to_message_id=message.message_id)
                 return
             if chat_id not in bot_data["user_titles"]:
@@ -1079,11 +1090,11 @@ async def handle_message(bot, message):
             if sender_id not in bot_data["user_titles"][chat_id]:
                 bot_data["user_titles"][chat_id][sender_id] = {}
             old_asl = bot_data["user_titles"][chat_id][sender_id].get("asl")
-            if old_asl and old_asl in bot_data["taken_asl"][chat_id]:
-                bot_data["taken_asl"][chat_id].remove(old_asl)
+            if old_asl and old_asl in taken_list:
+                taken_list.remove(old_asl)
             bot_data["user_titles"][chat_id][sender_id]["asl"] = asl_value
-            if asl_value not in bot_data["taken_asl"][chat_id]:
-                bot_data["taken_asl"][chat_id].append(asl_value)
+            if asl_value not in taken_list:
+                taken_list.append(asl_value)
             save_data(bot_data)
             await bot.send_message(chat_id=message.chat_id, text=f"✅ اصل ثبت شد:\n🐺 `{asl_value}`", reply_to_message_id=message.message_id)
             return
@@ -1095,10 +1106,9 @@ async def handle_message(bot, message):
             if not laghab_value:
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ مقدار لقب را وارد کنید.", reply_to_message_id=message.message_id)
                 return
-            if chat_id not in bot_data["taken_laghab"]:
-                bot_data["taken_laghab"][chat_id] = []
+            taken_list = ensure_list_dict(bot_data, "taken_laghab", chat_id)
             current_laghab = bot_data["user_titles"].get(chat_id, {}).get(sender_id, {}).get("laghab")
-            if laghab_value in bot_data["taken_laghab"][chat_id] and laghab_value != current_laghab:
+            if laghab_value in taken_list and laghab_value != current_laghab:
                 await bot.send_message(chat_id=message.chat_id, text=f"❌ لقب «{laghab_value}» تکراری است.", reply_to_message_id=message.message_id)
                 return
             if chat_id not in bot_data["user_titles"]:
@@ -1106,11 +1116,11 @@ async def handle_message(bot, message):
             if sender_id not in bot_data["user_titles"][chat_id]:
                 bot_data["user_titles"][chat_id][sender_id] = {}
             old_laghab = bot_data["user_titles"][chat_id][sender_id].get("laghab")
-            if old_laghab and old_laghab in bot_data["taken_laghab"][chat_id]:
-                bot_data["taken_laghab"][chat_id].remove(old_laghab)
+            if old_laghab and old_laghab in taken_list:
+                taken_list.remove(old_laghab)
             bot_data["user_titles"][chat_id][sender_id]["laghab"] = laghab_value
-            if laghab_value not in bot_data["taken_laghab"][chat_id]:
-                bot_data["taken_laghab"][chat_id].append(laghab_value)
+            if laghab_value not in taken_list:
+                taken_list.append(laghab_value)
             save_data(bot_data)
             await bot.send_message(chat_id=message.chat_id, text=f"✅ لقب ثبت شد:\n🎭 `{laghab_value}`", reply_to_message_id=message.message_id)
             return
@@ -1168,20 +1178,20 @@ async def handle_message(bot, message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings["warning"]:
-                        await add_warning(chat_id, sender_id, f"استفاده از فحش: {bad_word}")
+                        await add_warning(chat_id, sender_id, f"استفاده از فحش")
                 except Exception as e:
                     print(f"❌ DELETE: {e}", flush=True)
                 return
 
         # فیلتر
         if settings["filter"]:
-            filtered_list = bot_data["filtered_words"].get(chat_id, [])
+            filtered_list = ensure_list_dict(bot_data, "filtered_words", chat_id)
             matched = contains_filtered_word(raw_text, filtered_list)
             if matched:
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings["warning"]:
-                        await add_warning(chat_id, sender_id, f"کلمه فیلترشده: {matched}")
+                        await add_warning(chat_id, sender_id, f"کلمه فیلترشده")
                 except Exception as e:
                     print(f"❌ DELETE: {e}", flush=True)
                 return
