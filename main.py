@@ -4,10 +4,16 @@ import json
 import time
 import asyncio
 from datetime import datetime
-from rubka import Robot, Message, InlineBuilder
+from rubka import Robot, Message
+
+try:
+    from rubka.keypad import ChatKeypadBuilder
+    HAS_CHAT_KEYPAD = True
+except Exception as e:
+    print(f"⚠️ ChatKeypadBuilder import error: {e}", flush=True)
+    HAS_CHAT_KEYPAD = False
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
-
 if not TOKEN:
     raise RuntimeError("❌ RUBIKA_TOKEN تنظیم نشده است.")
 
@@ -15,6 +21,12 @@ bot = Robot(token=TOKEN)
 
 CACHE_FILE = "/app/message_cache.json"
 DATA_FILE = "/app/bot_data.json"
+
+# نام دکمه‌ها (برای شناسایی کلیک)
+BTN_CHANNEL = "📢 کانال رسمی"
+BTN_HELP = "📚 آموزش فعال‌سازی"
+BTN_USERS = "👥 کاربران"
+BTN_GROUPS = "🏠 گروه‌های فعال"
 
 
 # ================== توابع کمکی ==================
@@ -77,7 +89,7 @@ async def get_chat_name(chat_id: str) -> str:
         return "گروه"
 
 
-# ================== فایل کش ==================
+# ================== فایل‌ها ==================
 def load_cache():
     try:
         if os.path.exists(CACHE_FILE):
@@ -96,22 +108,13 @@ def save_cache(cache):
         print(f"⚠️ SAVE CACHE ERROR: {e}", flush=True)
 
 
-# ================== فایل داده‌ها ==================
 def load_data():
     default_data = {
-        "welcomed_users": {},
-        "user_titles": {},
-        "taken_asl": {},
-        "taken_laghab": {},
-        "message_counts": {},
-        "join_dates": {},
-        "special_users": {},
-        "warnings": {},
-        "warn_limit": {},
-        "started_users": [],
-        "known_groups": [],
-        "group_message_count": {},
-        "promo_sent": {},
+        "welcomed_users": {}, "user_titles": {}, "taken_asl": {},
+        "taken_laghab": {}, "message_counts": {}, "join_dates": {},
+        "special_users": {}, "warnings": {}, "warn_limit": {},
+        "started_users": [], "known_groups": [],
+        "group_message_count": {}, "promo_sent": {},
     }
     try:
         if os.path.exists(DATA_FILE):
@@ -137,15 +140,7 @@ def save_data(data):
 # ================== وضعیت‌ها ==================
 bot_is_active = True
 mute_list = {}
-settings = {
-    "link": False,
-    "id": False,
-    "spam": False,
-    "hyperlink": False,
-    "welcome": True,
-    "warning": False,
-}
-
+settings = {"link": False, "id": False, "spam": False, "hyperlink": False, "welcome": True, "warning": False}
 spam_tracker = {}
 message_cache = load_cache()
 bot_data = load_data()
@@ -155,11 +150,8 @@ bot_data = load_data()
 def contains_link(text: str) -> bool:
     if not text:
         return False
-    patterns = [
-        r'https?://\S+', r'www\.\S+', r't\.me/\S+', r'rubika\.ir/\S+',
-        r'telegram\.me/\S+', r'\.ir/\S+', r'\.com/\S+', r'\.org/\S+',
-        r'\.net/\S+', r'\.me/\S+',
-    ]
+    patterns = [r'https?://\S+', r'www\.\S+', r't\.me/\S+', r'rubika\.ir/\S+',
+                r'telegram\.me/\S+', r'\.ir/\S+', r'\.com/\S+', r'\.org/\S+', r'\.net/\S+', r'\.me/\S+']
     for p in patterns:
         if re.search(p, text, re.IGNORECASE):
             return True
@@ -210,26 +202,17 @@ async def add_warning(chat_id: str, user_id: str, reason: str = "") -> bool:
             f"👤 کاربر گرامی، شما یک اخطار دریافت کردید.\n"
             f"📌 **دلیل:** {reason if reason else 'تخلف از قوانین'}\n\n"
             f"📊 **اخطار فعلی:** [{count}/{limit}]\n\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ **FLUXBOT** | جریان قدرت"
         )
-
         try:
             await bot.send_message(chat_id=chat_id, text=warn_text)
         except Exception as e:
             print(f"⚠️ WARN SEND ERROR: {e}", flush=True)
 
         if count >= limit:
-            print(f"🚫 WARNING LIMIT - BANNING {user_id}", flush=True)
             try:
                 await bot.ban_member_chat(chat_id, user_id)
-                ban_text = (
-                    f"🚫 **کاربر اخراج شد!** 🚫\n\n"
-                    f"👤 کاربر به دلیل تخلفات مکرر اخراج شد.\n"
-                    f"📊 **تعداد اخطار:** [{count}/{limit}]\n\n"
-                    f"⚡ **FLUXBOT** | جریان قدرت"
-                )
-                await bot.send_message(chat_id=chat_id, text=ban_text)
+                await bot.send_message(chat_id=chat_id, text=f"🚫 کاربر به دلیل {limit} اخطار اخراج شد!")
                 bot_data["warnings"][chat_id][user_id] = 0
                 save_data(bot_data)
                 return True
@@ -253,42 +236,117 @@ def register_group(chat_id: str):
         save_data(bot_data)
 
 
-# ================== ساخت کیبورد شیشه‌ای ==================
-def make_button(text: str, btn_id: str):
-    """ساخت یک دکمه ساده"""
-    try:
-        return InlineBuilder().button_simple(id=btn_id, text=text)
-    except TypeError:
-        try:
-            return InlineBuilder().button_simple(text=text, id=btn_id)
-        except TypeError:
-            try:
-                return InlineBuilder().button_simple(btn_id, text)
-            except TypeError:
-                return InlineBuilder().button_simple(text, btn_id)
-
-
-def build_main_menu():
-    """ساخت منوی اصلی با دکمه‌های شیشه‌ای"""
-    try:
-        btn_channel = make_button("📢 کانال رسمی", "btn_channel")
-        btn_help = make_button("📚 آموزش فعال‌سازی", "btn_help")
-        btn_users = make_button("👥 کاربران", "btn_users")
-        btn_groups = make_button("🏠 گروه‌های فعال", "btn_groups")
-
-        builder = InlineBuilder()
-        builder.row(btn_channel)
-        builder.row(btn_help)
-        builder.row(btn_users, btn_groups)
-        keypad = builder.build()
-
-        print(f"✅ KEYPAD BUILT: {keypad}", flush=True)
-        return keypad
-    except Exception as e:
-        print(f"❌ BUILD MENU ERROR: {type(e).__name__}: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
+# ================== ساخت کیبورد پایین صفحه ==================
+def build_chat_keypad():
+    """ساخت کیبورد پایین صفحه (Chat Keypad) با 4 دکمه"""
+    if not HAS_CHAT_KEYPAD:
         return None
+    try:
+        # روش ۱: با add_button
+        try:
+            b = ChatKeypadBuilder()
+            b.add_button(BTN_CHANNEL)
+            b.add_button(BTN_HELP)
+            b.add_button(BTN_USERS)
+            b.add_button(BTN_GROUPS)
+            keypad = b.build()
+            print(f"✅ CHAT KEYPAD (method 1) built", flush=True)
+            return keypad
+        except Exception as e1:
+            print(f"⚠️ CHAT KEYPAD METHOD 1 FAILED: {e1}", flush=True)
+
+        # روش ۲: با row
+        try:
+            b = ChatKeypadBuilder()
+            b.row(BTN_CHANNEL, BTN_HELP)
+            b.row(BTN_USERS, BTN_GROUPS)
+            keypad = b.build()
+            print(f"✅ CHAT KEYPAD (method 2) built", flush=True)
+            return keypad
+        except Exception as e2:
+            print(f"⚠️ CHAT KEYPAD METHOD 2 FAILED: {e2}", flush=True)
+
+        # روش ۳: با add_row
+        try:
+            b = ChatKeypadBuilder()
+            b.add_row(BTN_CHANNEL, BTN_HELP)
+            b.add_row(BTN_USERS, BTN_GROUPS)
+            keypad = b.build()
+            print(f"✅ CHAT KEYPAD (method 3) built", flush=True)
+            return keypad
+        except Exception as e3:
+            print(f"⚠️ CHAT KEYPAD METHOD 3 FAILED: {e3}", flush=True)
+
+        # روش ۴: لیست ساده
+        try:
+            b = ChatKeypadBuilder()
+            b.buttons = [BTN_CHANNEL, BTN_HELP, BTN_USERS, BTN_GROUPS]
+            keypad = b.build()
+            print(f"✅ CHAT KEYPAD (method 4) built", flush=True)
+            return keypad
+        except Exception as e4:
+            print(f"⚠️ CHAT KEYPAD METHOD 4 FAILED: {e4}", flush=True)
+
+        return None
+    except Exception as e:
+        print(f"❌ BUILD KEYPAD ERROR: {type(e).__name__}: {e}", flush=True)
+        return None
+
+
+# ================== متن‌های دکمه‌ها ==================
+def get_channel_text():
+    return (
+        "📢 **کانال رسمی ربات FluxBot**\n\n"
+        "➣ **@Fluxbot1**\n\n"
+        "🌟 برای حمایت از ما، دریافت آخرین اخبار،\n"
+        "به‌روزرسانی‌ها و آموزش‌های ویژه،\n"
+        "لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n"
+        "💎 **عضویت شما، انگیزه ما برای بهتر شدن است.**\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
+
+
+def get_help_text():
+    return (
+        "📚 **آموزش فعال‌سازی ربات FluxBot**\n\n"
+        "🌟 **مراحل فعال‌سازی:**\n\n"
+        "1️⃣ **ربات را به گروه خود اضافه کنید**\n\n"
+        "2️⃣ **دسترسی کامل بدهید:**\n"
+        "   └ ربات را **ادمین** کنید\n"
+        "   └ دسترسی «حذف پیام» و «مشاهده پیام‌ها» را فعال کنید\n\n"
+        "3️⃣ **منتظر بمانید:**\n"
+        "   └ بین ۱ تا ۲ دقیقه صبر کنید\n\n"
+        "4️⃣ **فعال‌سازی:**\n"
+        "   └ در گروه بنویسید: `فعال`\n\n"
+        "💡 **نکته:** گزینه «دریافت همه پیام‌های گروه» را فعال کنید.\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
+
+
+def get_users_text():
+    user_count = len(bot_data.get("started_users", []))
+    return (
+        "👥 **آمار کاربران FluxBot**\n\n"
+        f"📊 **تعداد کاربران استارت‌زده:**\n"
+        f"└ **{user_count}** کاربر\n\n"
+        "🌟 از اعتماد شما سپاسگزاریم.\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
+
+
+def get_groups_text():
+    group_count = len(bot_data.get("known_groups", []))
+    return (
+        "🏠 **آمار گروه‌های فعال FluxBot**\n\n"
+        f"📊 **تعداد گروه‌های فعال:**\n"
+        f"└ **{group_count}** گروه\n\n"
+        "🌟 از اعتماد شما سپاسگزاریم.\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
 
 
 # ================== هندلر پیام‌ها ==================
@@ -324,10 +382,7 @@ async def handle_message(bot: Robot, message: Message):
 
         current_time = time.time()
         if current_time - handle_message.last_cleanup > 30:
-            handle_message.processed = {
-                k: v for k, v in handle_message.processed.items()
-                if current_time - v < 30
-            }
+            handle_message.processed = {k: v for k, v in handle_message.processed.items() if current_time - v < 30}
             handle_message.last_cleanup = current_time
 
         if msg_id in handle_message.processed:
@@ -337,11 +392,26 @@ async def handle_message(bot: Robot, message: Message):
         print(f"📩 MESSAGE | chat={chat_id} | sender={sender_id} | raw={raw_text!r}", flush=True)
 
         # ============================================================
-        # پیوی (چت خصوصی) - منوی دکمه‌ای
+        # پیوی
         # ============================================================
         if is_private_chat(chat_id):
+            # === بررسی کلیک روی دکمه‌های کیبورد ===
+            if raw_text == BTN_CHANNEL or clean_text == BTN_CHANNEL:
+                await bot.send_message(chat_id=chat_id, text=get_channel_text())
+                return
+            if raw_text == BTN_HELP or clean_text == BTN_HELP:
+                await bot.send_message(chat_id=chat_id, text=get_help_text())
+                return
+            if raw_text == BTN_USERS or clean_text == BTN_USERS:
+                await bot.send_message(chat_id=chat_id, text=get_users_text())
+                return
+            if raw_text == BTN_GROUPS or clean_text == BTN_GROUPS:
+                await bot.send_message(chat_id=chat_id, text=get_groups_text())
+                return
+
+            # === دستور start / منو ===
             if is_command(clean_text, "start", "شروع", "منو"):
-                print("📤 SENDING PV MENU", flush=True)
+                print("📤 SENDING PV MENU WITH CHAT KEYPAD", flush=True)
 
                 welcome_text = (
                     "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
@@ -351,54 +421,30 @@ async def handle_message(bot: Robot, message: Message):
                     "🌟 **به ربات مدیریتی FluxBot خوش آمدید!**\n\n"
                     "🤖 من یک ربات مدیریتی حرفه‌ای برای گروه‌های روبیکا هستم.\n"
                     "با من می‌تونید گروهتون رو به بهترین شکل مدیریت کنید.\n\n"
-                    "👇 **لطفاً یکی از گزینه‌های زیر رو انتخاب کنید:**"
+                    "👇 **از منوی پایین، یکی از گزینه‌ها رو انتخاب کنید:**"
                 )
 
-                keypad = build_main_menu()
+                keypad = build_chat_keypad()
 
                 if keypad is not None:
-                    try:
-                        # تلاش ۱: با پارامتر inline_keypad
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=welcome_text,
-                            inline_keypad=keypad
-                        )
-                        print("📤 SENT WITH inline_keypad", flush=True)
-                        return
-                    except Exception as e1:
-                        print(f"⚠️ ATTEMPT 1 FAILED: {e1}", flush=True)
+                    # چند روش ارسال
+                    sent = False
+                    for param_name in ["chat_keypad", "keypad", "reply_markup"]:
+                        try:
+                            kwargs = {"chat_id": chat_id, "text": welcome_text, param_name: keypad}
+                            await bot.send_message(**kwargs)
+                            print(f"📤 SENT WITH {param_name}", flush=True)
+                            sent = True
+                            break
+                        except Exception as e:
+                            print(f"⚠️ SEND WITH {param_name} FAILED: {e}", flush=True)
 
-                    try:
-                        # تلاش ۲: با پارامتر keypad
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=welcome_text,
-                            keypad=keypad
-                        )
-                        print("📤 SENT WITH keypad", flush=True)
-                        return
-                    except Exception as e2:
-                        print(f"⚠️ ATTEMPT 2 FAILED: {e2}", flush=True)
-
-                    try:
-                        # تلاش ۳: پارامتر chat_keypad
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=welcome_text,
-                            chat_keypad=keypad
-                        )
-                        print("📤 SENT WITH chat_keypad", flush=True)
-                        return
-                    except Exception as e3:
-                        print(f"⚠️ ATTEMPT 3 FAILED: {e3}", flush=True)
-
-                # اگه کیبورد کار نکرد
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=welcome_text + "\n\n⚠️ (دکمه‌ها در دسترس نیستند)"
-                )
-                print("📤 SENT WITHOUT KEYPAD", flush=True)
+                    if not sent:
+                        await bot.send_message(chat_id=chat_id, text=welcome_text)
+                        print("📤 SENT WITHOUT KEYPAD", flush=True)
+                else:
+                    await bot.send_message(chat_id=chat_id, text=welcome_text)
+                    print("📤 SENT (no keypad built)", flush=True)
                 return
             return
 
@@ -417,24 +463,21 @@ async def handle_message(bot: Robot, message: Message):
             bot_data["group_message_count"][chat_id] = 0
             bot_data["promo_sent"][chat_id] = bot_data["promo_sent"].get(chat_id, 0) + 1
             save_data(bot_data)
-
             promo_text = (
                 "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
                 "   ⚡ **FLUXBOT** ⚡\n"
                 "   🌊 جریان قدرت 🌊\n"
                 "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
                 "💎 **از مدیریت حرفه‌ای لذت می‌برید؟**\n\n"
-                "برای حمایت از ما و دریافت آخرین اخبار و به‌روزرسانی‌ها،\n"
-                "لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n"
-                "📢 **کانال رسمی ربات:**\n"
-                "➣ **@Fluxbot1**\n\n"
+                "برای حمایت از ما لطفاً در کانال رسمی عضو شوید:\n"
+                "📢 **@Fluxbot1**\n\n"
                 "━━━━━━━━━━━━━━━━━━━\n"
                 "⚡ **FLUXBOT** | جریان قدرت"
             )
             try:
                 await bot.send_message(chat_id=chat_id, text=promo_text)
             except Exception as e:
-                print(f"❌ PROMO SEND ERROR: {e}", flush=True)
+                print(f"❌ PROMO ERROR: {e}", flush=True)
         else:
             save_data(bot_data)
 
@@ -465,7 +508,6 @@ async def handle_message(bot: Robot, message: Message):
             if sender_id not in welcomed:
                 chat_name = await get_chat_name(chat_id)
                 now_str = get_now_time()
-
                 welcome_text = (
                     f"╭─━━━━━━━━━━━━━━━━━━━─╮\n"
                     f"   ⚡ **FLUXBOT** ⚡\n"
@@ -476,20 +518,18 @@ async def handle_message(bot: Robot, message: Message):
                     f"از اینکه به جمع ما پیوستید بی‌نهایت خوشحالیم. 🌹\n\n"
                     f"⏰ **زمان ورود:** {now_str}\n\n"
                     f"💎 **امکانات FluxBot:**\n"
-                    f"├ 📊 `پروفایل` - مشاهده پروفایل\n"
-                    f"├ 🐺 `تنظیم اصل [نام]` - تنظیم اصل\n"
-                    f"├ 🎭 `تنظیم لقب [نام]` - تنظیم لقب\n"
-                    f"├ 👑 `مقام` - مشاهده مقام\n"
-                    f"└ 📚 `راهنما` - مشاهده راهنما\n\n"
+                    f"├ 📊 `پروفایل`\n"
+                    f"├ 🐺 `تنظیم اصل [نام]`\n"
+                    f"├ 🎭 `تنظیم لقب [نام]`\n"
+                    f"├ 👑 `مقام`\n"
+                    f"└ 📚 `راهنما`\n\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"⚡ **FLUXBOT** | جریان قدرت"
                 )
-
                 try:
                     await bot.send_message(chat_id=chat_id, text=welcome_text, reply_to_message_id=message.message_id)
                 except Exception as e:
                     print(f"❌ WELCOME ERROR: {e}", flush=True)
-
                 if chat_id not in bot_data["welcomed_users"]:
                     bot_data["welcomed_users"][chat_id] = {}
                 bot_data["welcomed_users"][chat_id][sender_id] = True
@@ -507,10 +547,7 @@ async def handle_message(bot: Robot, message: Message):
         bot_data["message_counts"][chat_id][sender_id]["today"] += 1
         save_data(bot_data)
 
-        # ============================================================
-        # دستورات
-        # ============================================================
-
+        # --- دستورات ---
         if is_command(clean_text, "فعال", "فاعل"):
             if not can_manage:
                 return
@@ -541,7 +578,6 @@ async def handle_message(bot: Robot, message: Message):
             if minutes <= 0:
                 await bot.send_message(chat_id=message.chat_id, text="⚠️ عدد باید بیشتر از صفر باشد.", reply_to_message_id=message.message_id)
                 return
-
             target_user_id = None
             reply_id = None
             for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
@@ -553,20 +589,16 @@ async def handle_message(bot: Robot, message: Message):
                         else:
                             reply_id = str(val)
                         break
-
             if reply_id:
                 message_cache = load_cache()
                 if chat_id in message_cache and reply_id in message_cache[chat_id]:
                     target_user_id = message_cache[chat_id][reply_id]
-
             if not target_user_id:
                 target_user_id = sender_id
-
             end_time = time.time() + (minutes * 60)
             if chat_id not in mute_list:
                 mute_list[chat_id] = {}
             mute_list[chat_id][target_user_id] = end_time
-
             await bot.send_message(chat_id=message.chat_id, text=f"🔇 کاربر سکوت شد ({minutes} دقیقه).", reply_to_message_id=message.message_id)
             return
 
@@ -671,8 +703,7 @@ async def handle_message(bot: Robot, message: Message):
             state = feature_match.group(2)
             feature_key_map = {
                 "لینک": "link", "آیدی": "id", "اسپم": "spam",
-                "هایپرلینک": "hyperlink", "خوش‌آمدگویی": "welcome",
-                "خوش‌امدگویی": "welcome"
+                "هایپرلینک": "hyperlink", "خوش‌آمدگویی": "welcome", "خوش‌امدگویی": "welcome"
             }
             key = feature_key_map.get(feature)
             if key:
@@ -717,13 +748,11 @@ async def handle_message(bot: Robot, message: Message):
                 "├ 🎭 `تنظیم لقب [نام]`\n"
                 "└ 📚 `راهنما`\n\n"
                 "👑 **دستورات مالک / ویژه:**\n"
-                "├ ✅ `فعال`\n"
-                "├ 🛑 `غیرفعال` (فقط مالک)\n"
+                "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
                 "├ 🔇 `سکوت [عدد]`\n"
-                "├ ⚠️ `اخطار` (فقط مالک)\n"
-                "├ ⚙️ `تنظیم اخطار [عدد]` (فقط مالک)\n"
-                "├ ⭐ `ویژه` (فقط مالک)\n"
-                "├ ❌ `حذف ویژه` (فقط مالک)\n"
+                "├ ⚠️ `اخطار`\n"
+                "├ ⚙️ `تنظیم اخطار [عدد]`\n"
+                "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
                 "├ 🔗 `لینک باز/بسته`\n"
                 "├ 🆔 `آیدی باز/بسته`\n"
                 "├ 📢 `اسپم باز/بسته`\n"
@@ -828,7 +857,7 @@ async def handle_message(bot: Robot, message: Message):
             await bot.send_message(chat_id=message.chat_id, text=f"👤 **مقام شما:** {role}", reply_to_message_id=message.message_id)
             return
 
-        # بررسی خودکار
+        # --- بررسی خودکار ---
         if not bot_is_active:
             return
         if can_manage:
@@ -882,126 +911,9 @@ async def handle_message(bot: Robot, message: Message):
         print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
 
 
-# ================== هندلر کلیک روی دکمه‌های شیشه‌ای ==================
-@bot.on_callback_query()
-async def handle_callback(bot: Robot, callback):
-    try:
-        print(f"🔘 CALLBACK QUERY RECEIVED", flush=True)
-        print(f"🔘 Type: {type(callback)}", flush=True)
-
-        # چاپ همه attributeها
-        for attr in dir(callback):
-            if not attr.startswith('_'):
-                try:
-                    val = getattr(callback, attr)
-                    if not callable(val):
-                        print(f"🔘 {attr} = {val!r}", flush=True)
-                except:
-                    pass
-
-        # استخراج data
-        data = None
-        for attr in ['data', 'callback_data', 'button_id', 'id']:
-            if hasattr(callback, attr):
-                val = getattr(callback, attr)
-                if val:
-                    data = str(val)
-                    break
-
-        # استخراج chat_id
-        chat_id = None
-        for attr in ['chat_id']:
-            if hasattr(callback, attr):
-                val = getattr(callback, attr)
-                if val:
-                    chat_id = str(val)
-                    break
-
-        if not chat_id and hasattr(callback, 'message'):
-            msg = callback.message
-            if hasattr(msg, 'chat_id'):
-                chat_id = str(msg.chat_id)
-
-        print(f"🔘 DATA: {data} | CHAT: {chat_id}", flush=True)
-
-        if not data or not chat_id:
-            print("⚠️ MISSING DATA OR CHAT", flush=True)
-            return
-
-        # ============ دکمه کانال ============
-        if data == "btn_channel":
-            channel_text = (
-                "📢 **کانال رسمی ربات FluxBot**\n\n"
-                "➣ **@Fluxbot1**\n\n"
-                "🌟 برای حمایت از ما، دریافت آخرین اخبار،\n"
-                "به‌روزرسانی‌ها و آموزش‌های ویژه،\n"
-                "لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n"
-                "💎 **عضویت شما، انگیزه ما برای بهتر شدن است.**\n\n"
-                "━━━━━━━━━━━━━━━━━━━\n"
-                "⚡ **FLUXBOT** | جریان قدرت"
-            )
-            await bot.send_message(chat_id=chat_id, text=channel_text)
-            return
-
-        # ============ دکمه آموزش ============
-        if data == "btn_help":
-            help_text = (
-                "📚 **آموزش فعال‌سازی ربات FluxBot**\n\n"
-                "🌟 **مراحل فعال‌سازی:**\n\n"
-                "1️⃣ **ربات را به گروه خود اضافه کنید**\n\n"
-                "2️⃣ **دسترسی کامل بدهید:**\n"
-                "   └ ربات را **ادمین** کنید\n"
-                "   └ دسترسی «حذف پیام» و «مشاهده پیام‌ها» را فعال کنید\n\n"
-                "3️⃣ **منتظر بمانید:**\n"
-                "   └ بین ۱ تا ۲ دقیقه صبر کنید\n\n"
-                "4️⃣ **فعال‌سازی:**\n"
-                "   └ در گروه بنویسید: `فعال`\n"
-                "   └ ربات با پیام «✅ ربات فعال شد» پاسخ می‌دهد\n\n"
-                "💡 **نکته مهم:**\n"
-                "برای دیدن همه پیام‌ها، گزینه\n"
-                "«دریافت همه پیام‌های گروه» را فعال کنید.\n\n"
-                "━━━━━━━━━━━━━━━━━━━\n"
-                "⚡ **FLUXBOT** | جریان قدرت"
-            )
-            await bot.send_message(chat_id=chat_id, text=help_text)
-            return
-
-        # ============ دکمه کاربران ============
-        if data == "btn_users":
-            user_count = len(bot_data.get("started_users", []))
-            users_text = (
-                "👥 **آمار کاربران FluxBot**\n\n"
-                f"📊 **تعداد کاربران استارت‌زده:**\n"
-                f"└ **{user_count}** کاربر\n\n"
-                "🌟 از اعتماد شما سپاسگزاریم.\n\n"
-                "━━━━━━━━━━━━━━━━━━━\n"
-                "⚡ **FLUXBOT** | جریان قدرت"
-            )
-            await bot.send_message(chat_id=chat_id, text=users_text)
-            return
-
-        # ============ دکمه گروه‌های فعال ============
-        if data == "btn_groups":
-            group_count = len(bot_data.get("known_groups", []))
-            groups_text = (
-                "🏠 **آمار گروه‌های فعال FluxBot**\n\n"
-                f"📊 **تعداد گروه‌های فعال:**\n"
-                f"└ **{group_count}** گروه\n\n"
-                "🌟 از اعتماد شما سپاسگزاریم.\n\n"
-                "━━━━━━━━━━━━━━━━━━━\n"
-                "⚡ **FLUXBOT** | جریان قدرت"
-            )
-            await bot.send_message(chat_id=chat_id, text=groups_text)
-            return
-
-    except Exception as e:
-        print(f"❌ CALLBACK ERROR: {type(e).__name__}: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-
-
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
+    print(f"⌨️ ChatKeypad available: {HAS_CHAT_KEYPAD}", flush=True)
     try:
         await bot.run()
     except Exception as e:
