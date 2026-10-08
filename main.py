@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import time
 import asyncio
 from rubka import Robot, Message
@@ -10,6 +11,9 @@ if not TOKEN:
     raise RuntimeError("❌ RUBIKA_TOKEN تنظیم نشده است.")
 
 bot = Robot(token=TOKEN)
+
+# مسیر فایل برای ذخیره پیام‌ها
+DATA_FILE = "/app/message_cache.json"
 
 
 def clean_message(text: str) -> str:
@@ -46,14 +50,39 @@ async def get_user_role(chat_id: str, user_id: str) -> str:
         return "عضو"
 
 
+# ================== مدیریت فایل کش ==================
+def load_cache():
+    """بارگذاری کش پیام‌ها از فایل"""
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"⚠️ LOAD CACHE ERROR: {e}", flush=True)
+    return {}
+
+
+def save_cache(cache):
+    """ذخیره کش پیام‌ها در فایل"""
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"⚠️ SAVE CACHE ERROR: {e}", flush=True)
+
+
+# {chat_id: {message_id: sender_id}}
+message_cache = load_cache()
+
+
 # ================== متغیرهای وضعیت ==================
 bot_is_active = True
-mute_list = {}          # {chat_id: {user_id: end_timestamp}}
+mute_list = {}
 
 
 @bot.on_message()
 async def handle_message(bot: Robot, message: Message):
-    global bot_is_active
+    global bot_is_active, message_cache
 
     try:
         msg_id = str(message.message_id)
@@ -62,7 +91,21 @@ async def handle_message(bot: Robot, message: Message):
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
 
-        # ================== فیلتر پیام تکراری (قوی) ==================
+        # ================== ذخیره پیام در کش (فایل) ==================
+        if chat_id and msg_id and sender_id:
+            if chat_id not in message_cache:
+                message_cache[chat_id] = {}
+            message_cache[chat_id][msg_id] = sender_id
+
+            # فقط 200 پیام آخر رو نگه دار
+            if len(message_cache[chat_id]) > 200:
+                keys = list(message_cache[chat_id].keys())
+                for k in keys[:-200]:
+                    del message_cache[chat_id][k]
+
+            save_cache(message_cache)
+
+        # ================== فیلتر پیام تکراری ==================
         if not hasattr(handle_message, 'processed'):
             handle_message.processed = {}
             handle_message.last_cleanup = time.time()
@@ -166,7 +209,7 @@ async def handle_message(bot: Robot, message: Message):
             target_user_id = None
             reply_id = None
 
-            # پیدا کردن reply_id
+            # پیدا کردن reply_id از تمام فیلدهای ممکن
             for attr in ['reply_to_message_id', 'reply_to', 'reply_message_id']:
                 if hasattr(message, attr):
                     val = getattr(message, attr)
@@ -180,72 +223,18 @@ async def handle_message(bot: Robot, message: Message):
             print(f"🔍 REPLY ID: {reply_id}", flush=True)
 
             # ============================================================
-            # روش قطعی: استفاده از get_updates و چاپ کامل ساختار
+            # پیدا کردن sender_id از فایل کش (قطعی)
             # ============================================================
             if reply_id:
-                try:
-                    updates = await bot.get_updates()
-                    print(f"🔍 UPDATES TYPE: {type(updates)}", flush=True)
-
-                    # تبدیل به دیکشنری/لیست
-                    update_list = []
-                    if hasattr(updates, '__dict__'):
-                        # اگه AttrDict بود، به دیکشنری تبدیل کن
-                        updates_dict = dict(updates)
-                        print(f"🔍 UPDATES KEYS: {list(updates_dict.keys())}", flush=True)
-                        
-                        # جستجوی لیست آپدیت‌ها
-                        for key, value in updates_dict.items():
-                            if isinstance(value, list):
-                                update_list = value
-                                print(f"🔍 FOUND LIST IN KEY: {key} | LENGTH: {len(value)}", flush=True)
-                                break
-                    elif isinstance(updates, dict):
-                        data = updates.get("data", {})
-                        if isinstance(data, dict):
-                            update_list = data.get("updates", []) or data.get("messages", [])
-                        elif isinstance(data, list):
-                            update_list = data
-                    elif isinstance(updates, list):
-                        update_list = updates
-
-                    print(f"🔍 UPDATE LIST LENGTH: {len(update_list)}", flush=True)
-
-                    # چاپ اولین آپدیت برای دیدن ساختار
-                    if update_list:
-                        print(f"🔍 FIRST UPDATE SAMPLE: {update_list[0]}", flush=True)
-
-                    # جستجوی پیام با message_id == reply_id
-                    for upd in update_list:
-                        if not isinstance(upd, dict):
-                            continue
-                        
-                        # بررسی تمام فیلدهای ممکن برای message_id
-                        msg_id_val = str(
-                            upd.get("message_id") or 
-                            upd.get("id") or 
-                            ""
-                        )
-                        
-                        # بررسی توی message داخلی
-                        inner_msg = upd.get("message", {})
-                        if isinstance(inner_msg, dict):
-                            msg_id_val = msg_id_val or str(inner_msg.get("message_id") or "")
-                        
-                        if msg_id_val == str(reply_id):
-                            sender = str(
-                                upd.get("sender_id") or 
-                                upd.get("user_id") or 
-                                inner_msg.get("sender_id") or 
-                                ""
-                            )
-                            if sender:
-                                target_user_id = sender
-                                print(f"🎯 TARGET FOUND: {target_user_id}", flush=True)
-                                break
-
-                except Exception as e:
-                    print(f"⚠️ GET UPDATES ERROR: {e}", flush=True)
+                message_cache = load_cache()  # بارگذاری مجدد از فایل
+                if chat_id in message_cache and reply_id in message_cache[chat_id]:
+                    target_user_id = message_cache[chat_id][reply_id]
+                    print(f"🎯 TARGET FOUND IN FILE CACHE: {target_user_id}", flush=True)
+                else:
+                    print(f"⚠️ REPLY ID {reply_id} NOT FOUND IN CACHE", flush=True)
+                    # چاپ کش برای دیباگ
+                    if chat_id in message_cache:
+                        print(f"🔍 CACHE KEYS: {list(message_cache[chat_id].keys())[-10:]}", flush=True)
 
             # اگه پیدا نشد، خود فرستنده سکوت کن
             if not target_user_id:
