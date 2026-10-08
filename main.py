@@ -1,15 +1,12 @@
+import asyncio
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any
 
-from rubka import Robot, Message
+from rubka.asynco import Robot
+from rubka.context import Message
 
-
-# =========================================================
-# تنظیمات
-# =========================================================
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
@@ -18,935 +15,556 @@ ACTIVE_FILE = DATA_DIR / "active_groups.json"
 MUTED_FILE = DATA_DIR / "muted_users.json"
 CACHE_FILE = DATA_DIR / "message_cache.json"
 
-MAX_CACHE_PER_GROUP = 5000
 START_DELAY = 30
+REPLY_DELAY = 5
 RECONNECT_DELAY = 10
+MAX_CACHE_PER_GROUP = 5000
 
-
-# =========================================================
-# توکن
-# =========================================================
 
 if not TOKEN:
     raise RuntimeError(
-        "RUBIKA_TOKEN در Runflare تنظیم نشده است. "
-        "یک Environment Variable با نام RUBIKA_TOKEN بساز "
-        "و توکن ربات را در آن قرار بده."
+        "RUBIKA_TOKEN تنظیم نشده است. "
+        "در Runflare متغیر محیطی RUBIKA_TOKEN را تنظیم کن."
     )
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# =========================================================
-# ابزار JSON
-# =========================================================
-
 def load_json(path: Path, default: Any) -> Any:
     try:
         if not path.exists():
             return default
-
-        with path.open("r", encoding="utf-8") as file:
-            return json.load(file)
-
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        print(
-            f"[JSON LOAD ERROR] {path}: "
-            f"{type(exc).__name__}: {exc}",
-            flush=True,
-        )
+        print(f"[JSON LOAD ERROR] {path}: {exc}", flush=True)
         return default
 
 
-def save_json(path: Path, value: Any) -> bool:
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-
+def save_json(path: Path, value: Any) -> None:
     try:
-        with temp_path.open("w", encoding="utf-8") as file:
-            json.dump(
-                value,
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
-
-        temp_path.replace(path)
-        return True
-
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
     except OSError as exc:
-        print(
-            f"[JSON SAVE ERROR] {path}: "
-            f"{type(exc).__name__}: {exc}",
-            flush=True,
-        )
+        print(f"[JSON SAVE ERROR] {path}: {exc}", flush=True)
 
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-        return False
-
-
-# =========================================================
-# وضعیت ذخیره‌شده
-# =========================================================
-
-_raw_active_groups = load_json(
-    ACTIVE_FILE,
-    [],
-)
 
 active_groups: set[str] = {
-    str(group_id)
-    for group_id in _raw_active_groups
-    if group_id is not None
+    str(x)
+    for x in load_json(ACTIVE_FILE, [])
+    if x
 }
 
-
-_raw_muted_users = load_json(
-    MUTED_FILE,
-    {},
-)
-
 muted_users: dict[str, set[str]] = {}
-
-if isinstance(_raw_muted_users, dict):
-    for group_id, user_ids in _raw_muted_users.items():
-
-        if isinstance(
-            user_ids,
-            (list, tuple, set),
-        ):
+raw_muted = load_json(MUTED_FILE, {})
+if isinstance(raw_muted, dict):
+    for group_id, users in raw_muted.items():
+        if isinstance(users, (list, tuple, set)):
             muted_users[str(group_id)] = {
-                str(user_id)
-                for user_id in user_ids
-                if user_id is not None
+                str(x) for x in users if x
+            }
+
+message_cache: dict[str, dict[str, str]] = {}
+raw_cache = load_json(CACHE_FILE, {})
+if isinstance(raw_cache, dict):
+    for group_id, messages in raw_cache.items():
+        if isinstance(messages, dict):
+            message_cache[str(group_id)] = {
+                str(mid): str(uid)
+                for mid, uid in messages.items()
+                if mid and uid
             }
 
 
-_raw_cache = load_json(
-    CACHE_FILE,
-    {},
-)
-
-message_cache: dict[str, dict[str, str]] = {}
-
-if isinstance(_raw_cache, dict):
-
-    for group_id, messages in _raw_cache.items():
-
-        if not isinstance(
-            messages,
-            dict,
-        ):
-            continue
-
-        message_cache[str(group_id)] = {
-            str(message_id): str(user_id)
-            for message_id, user_id in messages.items()
-            if message_id is not None
-            and user_id is not None
-        }
-
-
 def save_state() -> None:
-
-    save_json(
-        ACTIVE_FILE,
-        sorted(active_groups),
-    )
-
+    save_json(ACTIVE_FILE, sorted(active_groups))
     save_json(
         MUTED_FILE,
         {
-            group_id: sorted(user_ids)
-            for group_id, user_ids in muted_users.items()
-            if user_ids
+            group_id: sorted(users)
+            for group_id, users in muted_users.items()
         },
     )
 
 
 def save_message_cache() -> None:
-
     save_json(
         CACHE_FILE,
         {
             group_id: dict(messages)
             for group_id, messages in message_cache.items()
-            if messages
         },
     )
 
 
-# =========================================================
-# ساخت ربات
-# =========================================================
+bot = Robot(TOKEN)
 
-bot = Robot(
-    token=TOKEN,
-    safeSendMode=True,
-    max_cache_size=2000,
-    max_msg_age=60,
-    retries=5,
-    retry_delay=1.0,
-    timeout=15,
-)
-
-
-# =========================================================
-# ابزارهای پیام
-# =========================================================
 
 def normalize_text(value: Any) -> str:
-
     if value is None:
         return ""
-
-    return " ".join(
-        str(value).strip().split()
-    )
+    text = str(value).replace("\u200c", " ").replace("\u200d", "")
+    return " ".join(text.strip().split())
 
 
-def get_chat_id(
-    message: Message,
-) -> str | None:
-
-    value = getattr(
-        message,
-        "chat_id",
-        None,
-    )
-
-    if value is None:
-        value = getattr(
-            message,
-            "chat_guid",
-            None,
-        )
-
-    if value is None:
-        return None
-
-    return str(value)
+def get_chat_id(message: Message) -> str | None:
+    for field in ("chat_id", "chat_guid", "object_guid"):
+        value = getattr(message, field, None)
+        if value:
+            return str(value)
+    return None
 
 
-def get_user_id(
-    message: Message,
-) -> str | None:
-
-    for attr in (
+def get_user_id(message: Message) -> str | None:
+    for field in (
         "sender_id",
         "author_guid",
         "sender_guid",
         "user_id",
     ):
-
-        value = getattr(
-            message,
-            attr,
-            None,
-        )
-
-        if value is not None:
+        value = getattr(message, field, None)
+        if value:
             return str(value)
 
-    return None
-
-
-def get_message_id(
-    message: Message,
-) -> str | None:
-
-    value = getattr(
-        message,
-        "message_id",
-        None,
-    )
-
-    if value is None:
-        value = getattr(
-            message,
-            "id",
-            None,
-        )
-
-    if value is None:
-        return None
-
-    return str(value)
-
-
-def get_reply_message_id(
-    message: Message,
-) -> str | None:
-
-    for attr in (
-        "reply_to_message_id",
-        "reply_message_id",
-    ):
-
-        value = getattr(
-            message,
-            attr,
-            None,
-        )
-
-        if value is not None:
-            return str(value)
-
-    reply = getattr(
-        message,
-        "reply_to_message",
-        None,
-    )
-
-    if isinstance(
-        reply,
-        dict,
-    ):
-
-        value = (
-            reply.get("message_id")
-            or reply.get("id")
-        )
-
-        if value is not None:
-            return str(value)
-
-    elif reply is not None:
-
-        for attr in (
-            "message_id",
-            "id",
-        ):
-
-            value = getattr(
-                reply,
-                attr,
-                None,
-            )
-
-            if value is not None:
-                return str(value)
-
-    return None
-
-
-def get_reply_target_id(
-    message: Message,
-) -> str | None:
-
-    reply = getattr(
-        message,
-        "reply_to_message",
-        None,
-    )
-
-    if isinstance(
-        reply,
-        dict,
-    ):
-
-        value = (
-            reply.get("sender_id")
-            or reply.get("author_guid")
-            or reply.get("sender_guid")
-            or reply.get("user_id")
-        )
-
-        if value is not None:
-            return str(value)
-
-    elif reply is not None:
-
-        for attr in (
+    raw = getattr(message, "raw_data", None)
+    if isinstance(raw, dict):
+        for field in (
             "sender_id",
             "author_guid",
             "sender_guid",
             "user_id",
         ):
-
-            value = getattr(
-                reply,
-                attr,
-                None,
-            )
-
-            if value is not None:
+            value = raw.get(field)
+            if value:
                 return str(value)
 
-    reply_id = get_reply_message_id(
-        message
-    )
-
-    if not reply_id:
-        return None
-
-    group_id = get_chat_id(
-        message
-    )
-
-    if not group_id:
-        return None
-
-    return (
-        message_cache
-        .get(group_id, {})
-        .get(reply_id)
-    )
+    return None
 
 
-# =========================================================
-# تشخیص مدیر
-# =========================================================
+def get_message_id(message: Message) -> str | None:
+    for field in ("message_id", "id"):
+        value = getattr(message, field, None)
+        if value:
+            return str(value)
 
-def contains_identifier(
-    value: Any,
-    wanted: str,
-) -> bool:
+    raw = getattr(message, "raw_data", None)
+    if isinstance(raw, dict):
+        value = raw.get("message_id") or raw.get("id")
+        if value:
+            return str(value)
 
+    return None
+
+
+def get_reply_message_id(message: Message) -> str | None:
+    value = getattr(message, "reply_to_message_id", None)
+    if value:
+        return str(value)
+
+    raw = getattr(message, "raw_data", None)
+    if isinstance(raw, dict):
+        value = (
+            raw.get("reply_to_message_id")
+            or raw.get("reply_message_id")
+        )
+        if value:
+            return str(value)
+
+    return None
+
+
+def contains_identifier(value: Any, wanted: str) -> bool:
     if value is None:
         return False
 
-    if isinstance(
-        value,
-        str,
-    ):
+    wanted = str(wanted)
+
+    if isinstance(value, str):
         return value == wanted
 
-    if isinstance(
-        value,
-        dict,
-    ):
-
-        for item in value.values():
-
-            if contains_identifier(
-                item,
-                wanted,
-            ):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key) == wanted:
                 return True
-
+            if contains_identifier(item, wanted):
+                return True
         return False
 
-    if isinstance(
-        value,
-        (list, tuple, set),
-    ):
-
-        for item in value:
-
-            if contains_identifier(
-                item,
-                wanted,
-            ):
-                return True
-
-        return False
+    if isinstance(value, (list, tuple, set)):
+        return any(
+            contains_identifier(item, wanted)
+            for item in value
+        )
 
     return False
 
 
-async def is_group_admin(
-    group_id: str,
-    user_id: str,
-) -> bool:
+def has_admin_role(value: Any) -> bool:
+    admin_words = {
+        "admin",
+        "administrator",
+        "owner",
+        "creator",
+        "مدیر",
+        "ادمین",
+        "مالک",
+    }
 
+    if value is None:
+        return False
+
+    if isinstance(value, str):
+        return value.strip().lower() in admin_words
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_name = str(key).strip().lower()
+            if key_name in {
+                "type",
+                "role",
+                "status",
+                "member_type",
+                "chat_member_status",
+            }:
+                if has_admin_role(item):
+                    return True
+            elif has_admin_role(item):
+                return True
+        return False
+
+    if isinstance(value, (list, tuple, set)):
+        return any(has_admin_role(item) for item in value)
+
+    return False
+
+
+async def is_group_admin(group_id: str, user_id: str) -> bool:
     try:
-
-        response = await bot.get_chat_admins(
-            group_id
-        )
-
-        return contains_identifier(
-            response,
-            user_id,
-        )
-
+        result = await bot.get_chat_admins(group_id)
+        if contains_identifier(result, user_id):
+            print(
+                f"[ADMIN CHECK] {user_id} -> ADMIN",
+                flush=True,
+            )
+            return True
     except Exception as exc:
-
         print(
-            f"[ADMIN CHECK ERROR] "
-            f"{type(exc).__name__}: {exc}",
+            f"[ADMIN LIST ERROR] {type(exc).__name__}: {exc}",
             flush=True,
         )
 
-        return False
-
-
-# =========================================================
-# کش پیام‌ها برای ریپلای
-# =========================================================
-
-def remember_message(
-    message: Message,
-) -> None:
-
-    group_id = get_chat_id(
-        message
-    )
-
-    message_id = get_message_id(
-        message
-    )
-
-    user_id = get_user_id(
-        message
-    )
-
-    if not group_id:
-        return
-
-    if not message_id:
-        return
-
-    if not user_id:
-        return
-
-    group_cache = message_cache.setdefault(
-        group_id,
-        {},
-    )
-
-    group_cache[message_id] = user_id
-
-    while len(group_cache) > MAX_CACHE_PER_GROUP:
-
-        oldest_id = next(
-            iter(group_cache)
+    try:
+        result = await bot.get_chat_member(group_id, user_id)
+        if has_admin_role(result):
+            print(
+                f"[ADMIN CHECK] get_chat_member -> ADMIN",
+                flush=True,
+            )
+            return True
+    except Exception as exc:
+        print(
+            f"[MEMBER CHECK ERROR] {type(exc).__name__}: {exc}",
+            flush=True,
         )
 
-        group_cache.pop(
-            oldest_id,
-            None,
+    return False
+
+
+async def delayed_reply(message: Message, text: str) -> None:
+    await asyncio.sleep(REPLY_DELAY)
+
+    try:
+        result = message.reply(text)
+        if hasattr(result, "__await__"):
+            await result
+        return
+    except Exception as exc:
+        print(
+            f"[REPLY ERROR] {type(exc).__name__}: {exc}",
+            flush=True,
         )
+
+    chat_id = get_chat_id(message)
+    if not chat_id:
+        return
+
+    try:
+        result = bot.send_message(chat_id, text)
+        if hasattr(result, "__await__"):
+            await result
+    except Exception as exc:
+        print(
+            f"[REPLY FALLBACK ERROR] {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+
+def remember_message(message: Message) -> None:
+    group_id = get_chat_id(message)
+    message_id = get_message_id(message)
+    user_id = get_user_id(message)
+
+    if not group_id or not message_id or not user_id:
+        return
+
+    cache = message_cache.setdefault(group_id, {})
+    cache[message_id] = user_id
+
+    if len(cache) > MAX_CACHE_PER_GROUP:
+        extra = len(cache) - MAX_CACHE_PER_GROUP
+        for old_id in list(cache.keys())[:extra]:
+            cache.pop(old_id, None)
 
     save_message_cache()
 
 
-# =========================================================
-# هندلر اصلی پیام‌ها
-# =========================================================
+def get_reply_target_from_raw(message: Message) -> str | None:
+    raw = getattr(message, "raw_data", None)
+    if not isinstance(raw, dict):
+        return None
 
-@bot.on_message()
+    for key in (
+        "reply_to_message",
+        "reply_message",
+        "replied_message",
+    ):
+        data = raw.get(key)
+        if isinstance(data, dict):
+            for field in (
+                "sender_id",
+                "author_guid",
+                "sender_guid",
+                "user_id",
+            ):
+                value = data.get(field)
+                if value:
+                    return str(value)
+
+    return None
+
+
+async def safe_delete(group_id: str, message_id: str) -> None:
+    try:
+        result = bot.delete_message(group_id, message_id)
+        if hasattr(result, "__await__"):
+            await result
+    except Exception as exc:
+        print(
+            f"[DELETE ERROR] {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+
+@bot.on_message_group()
 async def handle_group_message(
     bot_instance: Robot,
     message: Message,
 ):
-
     try:
-
-        # فقط پیام‌های گروه
-        if not bool(
-            getattr(
-                message,
-                "is_group",
-                False,
-            )
-        ):
-            return
-
-        group_id = get_chat_id(
-            message
-        )
-
-        user_id = get_user_id(
-            message
-        )
+        group_id = get_chat_id(message)
+        user_id = get_user_id(message)
 
         if not group_id or not user_id:
-
             print(
-                "[MESSAGE ERROR] "
-                "chat_id یا user_id پیدا نشد.",
+                "[MESSAGE ERROR] chat_id یا user_id پیدا نشد.",
                 flush=True,
             )
-
             return
 
         text = normalize_text(
-            getattr(
-                message,
-                "text",
-                None,
-            )
+            getattr(message, "text", None)
         )
 
         print(
-            f"[MESSAGE] "
-            f"group={group_id} "
-            f"user={user_id} "
-            f"text={text!r}",
+            f"[MESSAGE] group={group_id} "
+            f"user={user_id} text={text!r}",
             flush=True,
         )
 
-        # ذخیره پیام
-        remember_message(
-            message
-        )
+        remember_message(message)
 
-        # =================================================
         # فعال
-        # =================================================
-
         if text == "فعال":
+            print(
+                f"[ACTIVATE] {group_id} by {user_id}",
+                flush=True,
+            )
 
-            if not await is_group_admin(
+            admin_ok = await is_group_admin(
                 group_id,
                 user_id,
-            ):
+            )
 
-                print(
-                    f"[ACTIVATE DENIED] "
-                    f"user={user_id} "
-                    f"is not admin "
-                    f"in {group_id}",
-                    flush=True,
+            if not admin_ok:
+                await delayed_reply(
+                    message,
+                    "⛔ فقط مدیر گروه می‌تواند ربات را فعال کند.\n"
+                    "اگر مدیر هستی، مطمئن شو ربات دسترسی مدیریت گروه را دارد.",
                 )
-
-                try:
-
-                    await message.reply(
-                        "⛔ فقط مدیر گروه "
-                        "می‌تواند ربات را فعال کند."
-                    )
-
-                except Exception as exc:
-
-                    print(
-                        f"[ACTIVATE DENIED REPLY ERROR] "
-                        f"{type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
-
                 return
 
-            first_activation = (
-                group_id
-                not in active_groups
-            )
+            was_active = group_id in active_groups
 
-            active_groups.add(
-                group_id
-            )
-
-            muted_users.setdefault(
-                group_id,
-                set(),
-            )
-
+            active_groups.add(group_id)
+            muted_users.setdefault(group_id, set())
             save_state()
 
-            try:
-
-                if first_activation:
-
-                    await message.reply(
-                        "✅ ربات در این گروه فعال شد."
-                    )
-
-                else:
-
-                    await message.reply(
-                        "✅ ربات از قبل فعال بود "
-                        "و دوباره فعال شد."
-                    )
-
-            except Exception as exc:
-
-                print(
-                    f"[ACTIVATE REPLY ERROR] "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
+            if was_active:
+                await delayed_reply(
+                    message,
+                    "✅ ربات از قبل فعال بود و دوباره فعال شد.",
                 )
-
+            else:
+                await delayed_reply(
+                    message,
+                    "✅ ربات در این گروه فعال شد.",
+                )
             return
 
-        # =================================================
-        # گروه فعال نشده
-        # =================================================
-
+        # تا قبل از فعال شدن هیچ دستور مدیریتی اجرا نشود.
         if group_id not in active_groups:
             return
 
-        # =================================================
-        # حذف پیام کاربر ساکت‌شده
-        # =================================================
-
-        if user_id in muted_users.get(
-            group_id,
-            set(),
-        ):
-
-            message_id = get_message_id(
-                message
-            )
-
+        # حذف پیام کاربر ساکت
+        if user_id in muted_users.get(group_id, set()):
+            message_id = get_message_id(message)
             if message_id:
-
-                try:
-
-                    await bot_instance.delete_message(
-                        chat_id=group_id,
-                        message_id=message_id,
-                    )
-
-                except Exception as exc:
-
-                    print(
-                        f"[DELETE MUTED ERROR] "
-                        f"{type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
-
+                await safe_delete(group_id, message_id)
             return
 
-        # =================================================
         # سکوت
-        # =================================================
-
         if text != "سکوت":
             return
 
-        if not await is_group_admin(
-            group_id,
-            user_id,
-        ):
-
-            try:
-
-                await message.reply(
-                    "⛔ فقط مدیر گروه "
-                    "می‌تواند از سکوت استفاده کند."
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"[SILENCE ADMIN REPLY ERROR] "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
+        if not await is_group_admin(group_id, user_id):
+            await delayed_reply(
+                message,
+                "⛔ فقط مدیر گروه می‌تواند از دستور سکوت استفاده کند.",
+            )
             return
 
-        target_id = get_reply_target_id(
-            message
-        )
+        reply_id = get_reply_message_id(message)
+        if not reply_id:
+            await delayed_reply(
+                message,
+                "⚠️ روی پیام کاربر ریپلای کن و بنویس: سکوت",
+            )
+            return
+
+        target_id = get_reply_target_from_raw(message)
 
         if not target_id:
+            target_id = message_cache.get(
+                group_id,
+                {},
+            ).get(reply_id)
 
-            try:
-
-                await message.reply(
-                    "⚠️ روی پیام کاربر ریپلای کن "
-                    "و بنویس: سکوت"
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"[SILENCE HELP REPLY ERROR] "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
+        if not target_id:
+            await delayed_reply(
+                message,
+                "⚠️ کاربر پیام ریپلای‌شده پیدا نشد. "
+                "روی پیامی که ربات قبلاً دیده ریپلای کن و دوباره بنویس: سکوت",
+            )
             return
 
-        # نمی‌تواند خودش را ساکت کند
+        target_id = str(target_id)
+
         if target_id == user_id:
-
-            try:
-
-                await message.reply(
-                    "⛔ نمی‌توانی خودت را ساکت کنی."
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"[SELF SILENCE REPLY ERROR] "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
+            await delayed_reply(
+                message,
+                "⛔ نمی‌توانی خودت را ساکت کنی.",
+            )
             return
 
-        # مدیران قابل سکوت نیستند
-        if await is_group_admin(
-            group_id,
-            target_id,
-        ):
-
-            try:
-
-                await message.reply(
-                    "⛔ مدیر گروه قابل سکوت نیست."
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"[ADMIN TARGET REPLY ERROR] "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
+        if await is_group_admin(group_id, target_id):
+            await delayed_reply(
+                message,
+                "⛔ مدیر گروه قابل سکوت نیست.",
+            )
             return
 
-        # اعمال محدودیت
         try:
-
             result = await bot_instance.restrict_chat_member(
-                chat_id=group_id,
-                user_id=target_id,
+                group_id,
+                target_id,
                 until=0,
             )
-
         except Exception as exc:
-
             print(
-                f"[RESTRICT ERROR] "
-                f"{type(exc).__name__}: {exc}",
+                f"[RESTRICT ERROR] {type(exc).__name__}: {exc}",
                 flush=True,
             )
-
-            try:
-
-                await message.reply(
-                    "❌ سکوت انجام نشد. "
-                    "مطمئن شو ربات دسترسی مدیریت "
-                    "اعضا را دارد."
-                )
-
-            except Exception as reply_exc:
-
-                print(
-                    f"[RESTRICT ERROR REPLY ERROR] "
-                    f"{type(reply_exc).__name__}: "
-                    f"{reply_exc}",
-                    flush=True,
-                )
-
+            await delayed_reply(
+                message,
+                "❌ سکوت انجام نشد. "
+                "مطمئن شو ربات مدیر گروه است و اجازه مدیریت اعضا را دارد.",
+            )
             return
 
-        # بررسی پاسخ API
-        if isinstance(
-            result,
-            dict,
-        ):
-
+        if isinstance(result, dict):
             status = str(
-                result.get(
-                    "status",
-                    "OK",
+                result.get("status", "")
+            ).strip().upper()
+
+            if status and status != "OK":
+                print(
+                    f"[RESTRICT STATUS] {status}",
+                    flush=True,
                 )
-            ).upper()
-
-            if status not in {
-                "",
-                "OK",
-            }:
-
-                try:
-
-                    await message.reply(
-                        "❌ درخواست سکوت "
-                        "توسط روبیکا پذیرفته نشد.\n"
-                        f"وضعیت: {status}"
-                    )
-
-                except Exception as exc:
-
-                    print(
-                        f"[RESTRICT STATUS REPLY ERROR] "
-                        f"{type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
-
+                await delayed_reply(
+                    message,
+                    "❌ روبیکا درخواست سکوت را نپذیرفت.",
+                )
                 return
 
-        # ذخیره کاربر ساکت‌شده
-        muted_users.setdefault(
-            group_id,
-            set(),
-        ).add(target_id)
-
+        muted_users.setdefault(group_id, set()).add(target_id)
         save_state()
 
-        try:
-
-            await message.reply(
-                "✅ کاربر سکوت شد."
-            )
-
-        except Exception as exc:
-
-            print(
-                f"[SILENCE SUCCESS REPLY ERROR] "
-                f"{type(exc).__name__}: {exc}",
-                flush=True,
-            )
+        await delayed_reply(
+            message,
+            "✅ کاربر سکوت شد.",
+        )
 
     except Exception as exc:
-
         print(
-            f"[HANDLER ERROR] "
-            f"{type(exc).__name__}: {exc}",
+            f"[HANDLER ERROR] {type(exc).__name__}: {exc}",
             flush=True,
         )
 
 
-# =========================================================
-# شروع ربات
-# =========================================================
-
-def start() -> None:
-
+async def run_bot() -> None:
     print(
         "🤖 RP Group Manager is starting...",
         flush=True,
     )
 
     print(
-        f"⏳ ربات {START_DELAY} ثانیه دیگر "
-        "راه‌اندازی می‌شود...",
+        "⏳ ربات ۳۰ ثانیه دیگر راه‌اندازی می‌شود...",
         flush=True,
     )
 
-    time.sleep(
-        START_DELAY
-    )
+    await asyncio.sleep(START_DELAY)
 
     while True:
-
         try:
-
             print(
                 "🚀 در حال اتصال به روبیکا...",
                 flush=True,
             )
 
-            # Rubka خودش event loop را مدیریت می‌کند
-            bot.run()
+            await bot.run()
 
             print(
-                "⚠️ حلقه اجرای ربات متوقف شد.",
+                "⚠️ حلقه دریافت پیام متوقف شد.",
                 flush=True,
             )
 
-        except KeyboardInterrupt:
-
-            print(
-                "🛑 ربات توسط سیستم متوقف شد.",
-                flush=True,
-            )
-
-            break
+        except asyncio.CancelledError:
+            raise
 
         except Exception as exc:
-
             print(
                 f"❌ خطای اتصال/اجرای ربات: "
                 f"{type(exc).__name__}: {exc}",
@@ -954,19 +572,12 @@ def start() -> None:
             )
 
         print(
-            f"🔄 تلاش دوباره تا "
-            f"{RECONNECT_DELAY} ثانیه دیگر...",
+            f"🔄 تلاش دوباره تا {RECONNECT_DELAY} ثانیه دیگر...",
             flush=True,
         )
 
-        time.sleep(
-            RECONNECT_DELAY
-        )
+        await asyncio.sleep(RECONNECT_DELAY)
 
-
-# =========================================================
-# اجرا
-# =========================================================
 
 if __name__ == "__main__":
-    start()
+    asyncio.run(run_bot())
