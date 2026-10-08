@@ -27,64 +27,46 @@ def is_group_chat(chat_id: str) -> bool:
 
 async def get_user_role(chat_id: str, user_id: str) -> str:
     """
-    تشخیص نقش کاربر با استفاده از get_chat_info
+    تشخیص نقش کاربر با استفاده از get_chat_member
     """
     try:
-        # دریافت اطلاعات کامل گروه
-        chat_info = await bot.get_chat_info(chat_id)
-        print(f"🔍 CHAT INFO: {chat_info}", flush=True)
+        # دریافت اطلاعات کاربر در گروه
+        member_info = await bot.get_chat_member(chat_id, user_id)
+        print(f"🔍 MEMBER INFO: {member_info}", flush=True)
 
-        if not chat_info:
+        if not member_info:
             return "عضو"
 
         # استخراج داده‌ها
-        data = chat_info
-        if isinstance(chat_info, dict) and "data" in chat_info:
-            data = chat_info["data"]
+        data = member_info
+        if isinstance(member_info, dict) and "data" in member_info:
+            data = member_info["data"]
 
-        user_id_str = str(user_id)
-
-        # ۱. بررسی مالک گروه
-        owner_id = str(
-            data.get("owner_id") or 
-            data.get("creator_id") or 
-            data.get("owner_guid") or 
+        # بررسی نقش
+        role = str(
+            data.get("role") or 
+            data.get("access") or 
+            data.get("member_type") or 
+            data.get("type") or 
+            data.get("permission") or 
             ""
-        )
-        if owner_id == user_id_str:
+        ).lower()
+
+        print(f"🔍 DETECTED ROLE: {role!r}", flush=True)
+
+        if "owner" in role or "مالک" in role or "creator" in role:
             return "مالک"
+        if "admin" in role or "ادمین" in role:
+            return "ادمین"
+        if "member" in role or "عضو" in role:
+            return "عضو"
 
-        # ۲. بررسی ادمین‌ها (در کلیدهای مختلف)
-        admins = (
-            data.get("admins") or 
-            data.get("admin_list") or 
-            data.get("administrators") or 
-            []
-        )
+        # اگه هیچکدوم نبود، بررسی فیلدهای دیگه
+        if data.get("is_owner"):
+            return "مالک"
+        if data.get("is_admin"):
+            return "ادمین"
 
-        if isinstance(admins, list):
-            for admin in admins:
-                if not isinstance(admin, dict):
-                    continue
-                admin_id = str(
-                    admin.get("user_guid") or 
-                    admin.get("member_guid") or 
-                    admin.get("guid") or 
-                    admin.get("user_id") or 
-                    ""
-                )
-                if admin_id == user_id_str:
-                    role = str(
-                        admin.get("role") or 
-                        admin.get("access") or 
-                        admin.get("type") or 
-                        ""
-                    ).lower()
-                    if "owner" in role or "مالک" in role:
-                        return "مالک"
-                    return "ادمین"
-
-        # ۳. اگه توی لیست ادمین‌ها نبود
         return "عضو"
 
     except Exception as e:
