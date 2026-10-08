@@ -1,13 +1,20 @@
 import os
 import asyncio
 import traceback
+import time
 
 from rubka import Robot
+
+
+# =========================================
+# CONFIG
+# =========================================
 
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("RUBIKA_TOKEN پیدا نشد.")
+    raise RuntimeError("❌ RUBIKA_TOKEN پیدا نشد.")
+
 
 bot = Robot(
     token=TOKEN,
@@ -18,27 +25,75 @@ bot = Robot(
 )
 
 
-async def send_delayed(chat_id, message_id):
+# =========================================
+# DUPLICATE PROTECTION
+# =========================================
+
+processed_messages = {}
+MAX_CACHE_SIZE = 500
+
+
+def already_processed(message_id):
+    if not message_id:
+        return True
+
+    message_id = str(message_id)
+
+    # اگر قبلاً پردازش شده
+    if message_id in processed_messages:
+        return True
+
+    processed_messages[message_id] = time.time()
+
+    # تمیز کردن cache
+    if len(processed_messages) > MAX_CACHE_SIZE:
+        oldest = min(
+            processed_messages,
+            key=processed_messages.get
+        )
+        processed_messages.pop(oldest, None)
+
+    return False
+
+
+# =========================================
+# SEND RESPONSE
+# =========================================
+
+async def send_response(chat_id, message_id):
+
     try:
         await asyncio.sleep(5)
 
-        await bot.send_message(
+        result = await bot.send_message(
             chat_id=chat_id,
-            text="✅ ربات فعال است.",
+            text="✅ ربات فعال است و پیام شما را دریافت کرد.",
             reply_to_message_id=message_id
         )
 
-        print("📤 پاسخ ارسال شد", flush=True)
+        print(
+            f"📤 RESPONSE SENT | result={result}",
+            flush=True
+        )
 
     except Exception as e:
+
         print(
             f"❌ SEND ERROR: {type(e).__name__}: {e}",
             flush=True
         )
 
+        traceback.print_exc()
+
+
+# =========================================
+# PROCESS UPDATE
+# =========================================
 
 async def process_update(update):
+
     try:
+
         if not isinstance(update, dict):
             return
 
@@ -49,7 +104,6 @@ async def process_update(update):
             flush=True
         )
 
-        # فقط پیام جدید
         if update_type != "NewMessage":
             return
 
@@ -60,6 +114,17 @@ async def process_update(update):
         sender_id = msg.get("sender_id")
         text = str(msg.get("text") or "").strip()
 
+        if not chat_id or not message_id:
+            return
+
+        # جلوگیری از تکرار
+        if already_processed(message_id):
+            print(
+                f"⏭ DUPLICATE SKIPPED | message_id={message_id}",
+                flush=True
+            )
+            return
+
         print(
             f"💬 NEW MESSAGE | "
             f"chat={chat_id} | "
@@ -68,36 +133,63 @@ async def process_update(update):
             flush=True
         )
 
-        if text == "فعال" and chat_id and message_id:
-            print("✅ فعال دریافت شد", flush=True)
+        # فعال
+        # فاعل هم عمداً قبول می‌شود تا اشتباه تایپی باعث مشکل نشود
+        if text in ("فعال", "فاعل"):
+
+            print(
+                f"✅ ACTIVATE COMMAND | chat={chat_id}",
+                flush=True
+            )
 
             asyncio.create_task(
-                send_delayed(
+                send_response(
                     chat_id,
                     message_id
                 )
             )
 
     except Exception as e:
+
         print(
-            f"❌ PROCESS ERROR: {type(e).__name__}: {e}",
+            f"❌ PROCESS UPDATE ERROR: "
+            f"{type(e).__name__}: {e}",
             flush=True
         )
+
         traceback.print_exc()
 
 
+# =========================================
+# MAIN POLLING
+# =========================================
+
 async def main():
-    print("🤖 RP GROUP MANAGER STARTING...", flush=True)
+
+    print(
+        "🤖 RP GROUP MANAGER STARTING...",
+        flush=True
+    )
 
     # تست توکن
-    me = await bot.get_me()
+    try:
 
-    if not me or me.get("status") != "OK":
-        raise RuntimeError(
-            f"getMe ناموفق بود: {me}"
+        me = await bot.get_me()
+
+        print(
+            f"✅ TOKEN OK | {me}",
+            flush=True
         )
 
-    print("✅ TOKEN OK", flush=True)
+    except Exception as e:
+
+        print(
+            f"❌ GETME ERROR: "
+            f"{type(e).__name__}: {e}",
+            flush=True
+        )
+
+        raise
 
     offset_id = None
 
@@ -107,7 +199,9 @@ async def main():
     )
 
     while True:
+
         try:
+
             result = await bot.get_updates(
                 offset_id=offset_id,
                 limit=100
@@ -115,14 +209,17 @@ async def main():
 
             if not isinstance(result, dict):
                 print(
-                    f"⚠️ پاسخ غیرمنتظره: {result!r}",
+                    f"⚠️ INVALID RESPONSE: {result!r}",
                     flush=True
                 )
+
                 await asyncio.sleep(3)
                 continue
 
             data = result.get("data") or {}
 
+            # بسیار مهم:
+            # Offset را جلو می‌بریم تا همان صف دوباره خوانده نشود
             next_offset = data.get("next_offset_id")
 
             if next_offset:
@@ -131,8 +228,9 @@ async def main():
             updates = data.get("updates") or []
 
             if updates:
+
                 print(
-                    f"📦 {len(updates)} آپدیت دریافت شد",
+                    f"📦 {len(updates)} UPDATES RECEIVED",
                     flush=True
                 )
 
@@ -142,31 +240,48 @@ async def main():
             await asyncio.sleep(1)
 
         except Exception as e:
+
             print(
-                f"⚠️ GET UPDATES ERROR: "
+                f"⚠️ MAIN LOOP ERROR: "
                 f"{type(e).__name__}: {e}",
                 flush=True
             )
 
+            # خطای موقت مثل 502 باعث خاموش شدن نشود
             await asyncio.sleep(5)
 
 
+# =========================================
+# START
+# =========================================
+
 try:
+
     asyncio.run(main())
 
 except KeyboardInterrupt:
-    print("🛑 STOPPED", flush=True)
 
-except Exception as e:
     print(
-        f"❌ FATAL: {type(e).__name__}: {e}",
+        "🛑 BOT STOPPED",
         flush=True
     )
+
+except Exception as e:
+
+    print(
+        f"❌ FATAL ERROR: "
+        f"{type(e).__name__}: {e}",
+        flush=True
+    )
+
     traceback.print_exc()
 
 finally:
+
     try:
+
         if hasattr(bot, "close"):
             asyncio.run(bot.close())
+
     except Exception:
         pass
