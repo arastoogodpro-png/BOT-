@@ -41,20 +41,20 @@ BTN_TOP_INVITERS = "🏆 لیست برتر دعوت‌کنندگان"
 MAX_FILTER_WORDS = 50
 
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
-PROMO_INTERVAL = 4 * 60 * 60
 
-# ================== State (توی RAM فقط برای سرعت) ==================
-username_cache = {}    # (TTL اضافه شد)
+# 🆕 تنظیمات تبلیغ
+PROMO_INTERVAL = 5 * 60 * 60        # هر ۵ ساعت
+PROMO_CHAT_COOLDOWN = 60 * 60        # حداقل ۱ ساعت بین تبلیغ‌ها در هر گروه
+PROMO_MSG_THRESHOLD = 200            # هر ۲۰۰ پیام
+
+username_cache = {}
 username_cache_ttl = {}
 spam_tracker = {}
 processed_messages = {}
 text_dedup = {}
 waiting_for_code = {}
-group_info_cache = {}   # کش لیست گروه‌ها
+group_info_cache = {}
 group_info_cache_ttl = {}
-
-# 🔧 FIX #1, #2: این سه تا حالا توی bot_data ذخیره می‌شن (persistent)
-# group_locks, temp_locks, scheduled_locks, mute_list → به bot_data منتقل شدند
 save_counter = {"data": 0, "cache": 0}
 
 EMPTY = "⚫"
@@ -201,16 +201,13 @@ def extract_msg_id(result):
     return None
 
 
-# ================== 🔧 FIX #10: User Info with TTL ==================
 async def get_user_info(chat_id, user_id, force=False):
     key = f"{chat_id}:{user_id}"
     now = time.time()
     cached = username_cache.get(key)
     ttl = username_cache_ttl.get(key, 0)
-    # 🔧 FIX #10: cache expire بعد از 1 ساعت
     if not force and cached and now < ttl and (cached.get("username") or cached.get("name")):
         return cached
-    
     info = {"name": None, "username": None, "role": "عضو"}
     try:
         mi = await bot.get_chat_member(chat_id, user_id)
@@ -224,7 +221,7 @@ async def get_user_info(chat_id, user_id, force=False):
             if st in ("creator", "owner"): info["role"] = "مالک"
             elif st in ("admin", "administrator"): info["role"] = "ادمین"
             username_cache[key] = info
-            username_cache_ttl[key] = now + 3600  # 1 ساعت
+            username_cache_ttl[key] = now + 3600
             save_known_user(user_id, info.get("name"), info.get("username"))
             save_data(bot_data)
     except Exception as e:
@@ -262,9 +259,7 @@ def format_user_display(ui, uid):
     return get_display_for_user(uid)
 
 
-# ================== 🔧 FIX #3: Reply Handling با Bot Check ==================
 async def get_bot_id():
-    """دریافت آیدی ربات برای جلوگیری از بن کردن خودش"""
     if BOT_ID_CACHE["id"]:
         return BOT_ID_CACHE["id"]
     try:
@@ -286,7 +281,6 @@ async def get_bot_id():
 
 
 def extract_reply_info(message):
-    """استخراج جامع اطلاعات پیام ریپلای‌شده"""
     result = {"reply_id": None, "sender_id": None}
     try:
         rt = (getattr(message, 'reply_to_message', None) or 
@@ -298,7 +292,6 @@ def extract_reply_info(message):
             elif isinstance(rt, dict):
                 mid = rt.get('message_id') or rt.get('id')
                 if mid: result["reply_id"] = str(mid)
-            
             if hasattr(rt, 'sender_id'): result["sender_id"] = str(rt.sender_id)
             elif hasattr(rt, 'user_id'): result["sender_id"] = str(rt.user_id)
             elif hasattr(rt, 'from_id'): result["sender_id"] = str(rt.from_id)
@@ -313,7 +306,6 @@ def extract_reply_info(message):
                 if sid: result["sender_id"] = str(sid)
     except Exception as e:
         print(f"⚠️ RT_PARSE: {e}", flush=True)
-    
     if not result["reply_id"]:
         for attr in ['reply_to_message_id', 'reply_message_id', 'reply_id', 'replyToMessageId']:
             try:
@@ -323,7 +315,6 @@ def extract_reply_info(message):
                     else: result["reply_id"] = str(val)
                     break
             except: pass
-    
     if not result["reply_id"]:
         try:
             aux = getattr(message, 'aux_data', None) or getattr(message, 'auxData', None)
@@ -339,16 +330,12 @@ def extract_reply_info(message):
 
 
 async def find_reply_target(message, chat_id):
-    """پیدا کردن کاربر ریپلای‌شده با 5 روش"""
     info = extract_reply_info(message)
     rid = info["reply_id"]
     sid_direct = info["sender_id"]
-    
     if sid_direct:
         bot_id = await get_bot_id()
-        # 🔧 FIX #3: جلوگیری از بن کردن ربات
         if bot_id and sid_direct == bot_id:
-            print(f"⚠️ Target is BOT itself!", flush=True)
             return "BOT_SELF"
         if rid and chat_id:
             c = load_cache()
@@ -356,10 +343,7 @@ async def find_reply_target(message, chat_id):
             c[chat_id][str(rid)] = sid_direct
             save_cache(c, force=True)
         return sid_direct
-    
     if not rid: return None
-    
-    # کش
     try:
         c = load_cache()
         if chat_id in c and rid in c[chat_id]:
@@ -369,8 +353,6 @@ async def find_reply_target(message, chat_id):
             return sid
     except Exception as e:
         print(f"⚠️ cache lookup: {e}", flush=True)
-    
-    # API
     try:
         msg = await bot.get_message(chat_id=chat_id, message_id=rid)
         if msg:
@@ -392,13 +374,10 @@ async def find_reply_target(message, chat_id):
                 return sid
     except Exception as e:
         print(f"⚠️ API get_message: {e}", flush=True)
-    
-    # 🔧 FIX #12: get_updates فقط به عنوان آخرین راه‌حل
-    print(f"⚠️ Target not found via 3 methods: rid={rid}", flush=True)
+    print(f"⚠️ Target not found: rid={rid}", flush=True)
     return None
 
 
-# ================== Other Utilities ==================
 def split_text(text, max_len=800):
     if not text: return [""]
     if len(text) <= max_len: return [text]
@@ -465,6 +444,18 @@ def get_top_inviters(limit=10):
         counts[inviter_id] = counts.get(inviter_id, 0) + 1
     sorted_list = sorted(counts.items(), key=lambda x: x[1], reverse=True)
     return sorted_list[:limit]
+
+
+def can_send_promo_to_chat(chat_id):
+    """🆕 چک میکنه آیا میتونه به این گروه تبلیغ بفرسته"""
+    last = bot_data.get("last_chat_promo", {}).get(chat_id, 0)
+    return (time.time() - last) >= PROMO_CHAT_COOLDOWN
+
+
+def mark_promo_sent(chat_id):
+    """🆕 ثبت زمان آخرین تبلیغ"""
+    if "last_chat_promo" not in bot_data: bot_data["last_chat_promo"] = {}
+    bot_data["last_chat_promo"][chat_id] = time.time()
 
 
 PROFANITY_LIST = [
@@ -614,22 +605,18 @@ async def get_chat_join_link(chat_id):
         return None
 
 
-# ================== 🔧 FIX #7, #8: Group List با کش ==================
 async def get_group_list_text():
     groups = ensure_list(bot_data.get("known_groups", []))
     if not groups:
         return "📋 **لیست گروه‌ها**\n\n📭 ربات هنوز توی هیچ گروهی نیست.\n\n⚡ **FLUXBOT**"
-    
     text = (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
         "   ⚡ **FLUXBOT** ⚡\n"
         f"   📋 لیست گروه‌ها ({len(groups)})\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
     )
-    
     now = time.time()
     for i, gid in enumerate(groups, 1):
-        # 🔧 FIX #7: چک کش
         cached = group_info_cache.get(gid)
         ttl = group_info_cache_ttl.get(gid, 0)
         if cached and now < ttl:
@@ -640,19 +627,16 @@ async def get_group_list_text():
                 name = await get_chat_name(gid)
                 link = await get_chat_join_link(gid)
                 group_info_cache[gid] = {"name": name, "link": link}
-                group_info_cache_ttl[gid] = now + 1800  # 30 دقیقه
+                group_info_cache_ttl[gid] = now + 1800
             except Exception as e:
                 print(f"⚠️ group info {gid}: {e}", flush=True)
                 name = f"گروه #{i}"
                 link = None
-            # 🔧 FIX #7: تاخیر کمتر
             await asyncio.sleep(0.15)
-        
         text += f"{i}. 🏠 **{name}**\n"
         if link: text += f"   🔗 {link}\n"
         else: text += f"   🔗 بدون لینک\n"
         text += "\n"
-    
     text += "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
     return text
 
@@ -690,7 +674,6 @@ def load_cache():
 def save_cache(cache, force=False):
     save_counter["cache"] += 1
     if not force and save_counter["cache"] % 3 != 0: return
-    # 🔧 FIX #11: محدودیت کلی روی cache
     total = sum(len(v) if isinstance(v, dict) else 0 for v in cache.values())
     if total > 5000:
         print(f"⚠️ Cache too big ({total}), trimming...", flush=True)
@@ -717,8 +700,9 @@ def load_data():
         "last_promo_time": {},
         "invite_codes": {}, "code_to_user": {}, "points": {}, "invited_users": {},
         "known_users": {}, "games": {},
-        # 🔧 FIX #1, #2: قفل‌ها و سکوت حالا persistent
         "group_locks": {}, "temp_locks": {}, "scheduled_locks": {}, "mute_list": {},
+        # 🆕 برای کول‌داون تبلیغ
+        "last_chat_promo": {},
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -759,7 +743,6 @@ def save_data(data, force=False):
             print(f"⚠️ save_data: {e}", flush=True)
 
 
-# ================== Load State ==================
 bot_is_active = True
 bot_data = load_data()
 settings = bot_data.get("settings", {})
@@ -769,32 +752,27 @@ for sk in ["link", "id", "spam", "hyperlink", "warning", "filter", "auto_ban",
 if "welcome" not in settings: settings["welcome"] = True
 message_cache = load_cache()
 
-# 🔧 FIX #1, #2: از bot_data می‌خونیم
 group_locks = bot_data.get("group_locks", {})
 temp_locks = bot_data.get("temp_locks", {})
 scheduled_locks = bot_data.get("scheduled_locks", {})
 mute_list = bot_data.get("mute_list", {})
 
-# 🔧 FIX #6: پاکسازی waiting_for_code و username_cache قدیمی
+
 async def cleanup_task():
     while True:
         try:
-            await asyncio.sleep(300)  # هر 5 دقیقه
+            await asyncio.sleep(300)
             now = time.time()
-            # waiting_for_code
             expired = [k for k, v in waiting_for_code.items() if now - v > 300]
             for k in expired: del waiting_for_code[k]
-            # text_dedup
             cutoff = now - 30
             keys = [k for k, v in text_dedup.items() if v < cutoff]
             for k in keys: 
                 if k in text_dedup: del text_dedup[k]
-            # username_cache
             expired = [k for k, v in username_cache_ttl.items() if now > v]
             for k in expired:
                 if k in username_cache: del username_cache[k]
                 if k in username_cache_ttl: del username_cache_ttl[k]
-            # processed_messages - 🔧 FIX #5: فقط قدیمی‌ها
             if len(processed_messages) > 1000:
                 items = sorted(processed_messages.items(), key=lambda x: x[1])
                 keep = dict(items[-500:])
@@ -860,7 +838,6 @@ def get_remaining_time(end_time):
 
 
 def is_group_locked(chat_id):
-    # 🔧 FIX #1: از bot_data می‌خونیم
     if bot_data.get("group_locks", {}).get(chat_id, False): return True, "قفل دستی"
     temp_locks_now = bot_data.get("temp_locks", {})
     if chat_id in temp_locks_now:
@@ -1148,7 +1125,6 @@ async def handle_message(bot, message):
         if sender_id: register_user(sender_id)
         if is_group_chat(chat_id): register_group(chat_id)
 
-        # ذخیره در کش
         if chat_id and msg_id and sender_id:
             if chat_id not in message_cache: message_cache[chat_id] = {}
             message_cache[chat_id][msg_id] = sender_id
@@ -1165,7 +1141,6 @@ async def handle_message(bot, message):
 
         ct = time.time()
         
-        # 🔧 FIX #5: پاکسازی processed_messages - فقط قدیمی‌ها
         if len(processed_messages) > 1000:
             items = sorted(processed_messages.items(), key=lambda x: x[1])
             keep = dict(items[-500:])
@@ -1175,7 +1150,6 @@ async def handle_message(bot, message):
         if msg_id in processed_messages: return
         processed_messages[msg_id] = ct
 
-        # 🔧 FIX #4: برای مالک، dedup غیرفعال
         is_owner_check = (str(sender_id) == OWNER_ID)
         if not is_owner_check:
             dedup_key = f"{chat_id}:{sender_id}:{raw_text}"
@@ -1286,7 +1260,6 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner_group or is_special
 
-        # چک قفل
         locked, reason = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -1409,7 +1382,6 @@ async def handle_message(bot, message):
                 f"🕐 `{now.strftime('%H:%M:%S')}`\n📅 `{now.strftime('%Y/%m/%d')}`\n📆 {wd}\n\n⚡ **FLUXBOT**"))
             return
 
-        # حذف ویژه
         if is_command(clean_text, "حذف ویژه", "لغو ویژه", "حذف ادمین"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
@@ -1429,7 +1401,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=f"ℹ️ **{td}** ویژه نیست.", reply_to_message_id=message.message_id)
             return
 
-        # ویژه
         if is_command(clean_text, "ویژه", "ادمین"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
@@ -1450,7 +1421,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=f"⭐ **{td} ویژه شد!**", reply_to_message_id=message.message_id)
             return
 
-        # حذف اخطار
         wam = re.match(r"^حذف\s+اخطار(?:\s+(\d+))?$", clean_text)
         if wam:
             if not can_manage: return
@@ -1516,7 +1486,6 @@ async def handle_message(bot, message):
         if is_command(clean_text, "باز", "بازکردن"):
             if not can_manage: return
             had = False
-            # 🔧 FIX #1: persistent
             if bot_data.get("group_locks", {}).get(chat_id, False):
                 bot_data["group_locks"][chat_id] = False
                 had = True
@@ -1531,7 +1500,6 @@ async def handle_message(bot, message):
 
         if is_command(clean_text, "قفل گروه", "قفلگروه"):
             if not can_manage: return
-            # 🔧 FIX #1: persistent
             if "group_locks" not in bot_data: bot_data["group_locks"] = {}
             bot_data["group_locks"][chat_id] = True
             save_data(bot_data, force=True)
@@ -1545,7 +1513,6 @@ async def handle_message(bot, message):
             if h <= 0 or h > 168:
                 await bot.send_message(chat_id=chat_id, text="⚠️ 1 تا 168 ساعت", reply_to_message_id=message.message_id); return
             et = time.time() + h * 3600
-            # 🔧 FIX #1: persistent
             if "temp_locks" not in bot_data: bot_data["temp_locks"] = {}
             if "group_locks" not in bot_data: bot_data["group_locks"] = {}
             bot_data["temp_locks"][chat_id] = et
@@ -1561,7 +1528,6 @@ async def handle_message(bot, message):
             sh, sm2, eh, em = map(int, sm.groups())
             if not (0 <= sh <= 23 and 0 <= sm2 <= 59 and 0 <= eh <= 23 and 0 <= em <= 59):
                 await bot.send_message(chat_id=chat_id, text="⚠️ ساعت نامعتبر", reply_to_message_id=message.message_id); return
-            # 🔧 FIX #1: persistent
             if "scheduled_locks" not in bot_data: bot_data["scheduled_locks"] = {}
             if chat_id not in bot_data["scheduled_locks"]: bot_data["scheduled_locks"][chat_id] = []
             bot_data["scheduled_locks"][chat_id].append((sh, sm2, eh, em))
@@ -1595,7 +1561,6 @@ async def handle_message(bot, message):
             return
 
         now = time.time()
-        # 🔧 FIX #2: persistent mute
         chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
         if sender_id in chat_mutes:
             if now < chat_mutes[sender_id]:
@@ -1609,14 +1574,24 @@ async def handle_message(bot, message):
                 bot_data["mute_list"][chat_id] = chat_mutes
                 save_data(bot_data, force=True)
 
+        # ================== شمارنده ۲۰۰ پیام با کول‌داون ==================
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
-        if bot_data["group_message_count"][chat_id] >= 200:
+        if bot_data["group_message_count"][chat_id] >= PROMO_MSG_THRESHOLD:
             bot_data["group_message_count"][chat_id] = 0
             save_data(bot_data, force=True)
-            try: await bot.send_message(chat_id=chat_id, text=get_promo_text())
-            except Exception as e:
-                print(f"⚠️ promo send: {e}", flush=True)
+            # 🆕 چک کول‌داون
+            if can_send_promo_to_chat(chat_id):
+                try:
+                    await bot.send_message(chat_id=chat_id, text=get_promo_text())
+                    mark_promo_sent(chat_id)
+                    save_data(bot_data, force=True)
+                    print(f"📢 200-MSG PROMO sent to {chat_id}", flush=True)
+                except Exception as e:
+                    print(f"⚠️ promo 200msg: {e}", flush=True)
+            else:
+                left = PROMO_CHAT_COOLDOWN - (time.time() - bot_data.get("last_chat_promo", {}).get(chat_id, 0))
+                print(f"⏸️ Promo skipped (cooldown {int(left)}s left)", flush=True)
         else: save_data(bot_data)
 
         if settings.get("welcome", True) and bot_is_active:
@@ -1684,14 +1659,12 @@ async def handle_message(bot, message):
         if is_command(clean_text, "بن", "سیک", "اخراج"):
             if not can_manage: return
             tgt = await find_reply_target(message, chat_id)
-            # 🔧 FIX #3: جلوگیری از بن کردن ربات
             if tgt == "BOT_SELF":
                 await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را اخراج کنید!", reply_to_message_id=message.message_id)
                 return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
-            # جلوگیری از بن کردن مالک
             if tgt == OWNER_ID:
                 await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید مالک ربات را اخراج کنید!", reply_to_message_id=message.message_id)
                 return
@@ -1809,7 +1782,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید مالک ربات را سکوت کنید.", reply_to_message_id=message.message_id)
                 return
             et = time.time() + mins * 60
-            # 🔧 FIX #2: persistent mute
             if "mute_list" not in bot_data: bot_data["mute_list"] = {}
             if chat_id not in bot_data["mute_list"]: bot_data["mute_list"][chat_id] = {}
             bot_data["mute_list"][chat_id][tgt] = et
@@ -2026,8 +1998,9 @@ async def handle_message(bot, message):
 
 
 async def auto_promo_task():
+    """🆕 تبلیغ خودکار هر ۵ ساعت با کول‌داون هر گروه"""
     print(f"⏰ AUTO PROMO STARTED (every {PROMO_INTERVAL // 3600} hours)", flush=True)
-    await asyncio.sleep(120)
+    await asyncio.sleep(180)  # ۳ دقیقه صبر اولیه
     while True:
         try:
             if not bot_data.get("settings", {}).get("auto_promo", True):
@@ -2035,16 +2008,23 @@ async def auto_promo_task():
                 continue
             groups = ensure_list(bot_data.get("known_groups", []))
             sent = 0
+            skipped = 0
             for gid in groups:
+                # 🆕 چک کول‌داون
+                if not can_send_promo_to_chat(gid):
+                    skipped += 1
+                    continue
                 try:
                     await bot.send_message(chat_id=gid, text=get_promo_text())
+                    mark_promo_sent(gid)
                     sent += 1
-                    await asyncio.sleep(2)
+                    save_data(bot_data, force=True)
+                    await asyncio.sleep(3)  # ۳ ثانیه بین گروه‌ها
                 except Exception as e:
                     print(f"⚠️ promo {gid}: {e}", flush=True)
-            bot_data["last_promo_time"] = {"time": time.time(), "sent": sent}
+            bot_data["last_promo_time"] = {"time": time.time(), "sent": sent, "skipped": skipped}
             save_data(bot_data, force=True)
-            print(f"💤 PROMO | sent={sent}", flush=True)
+            print(f"💤 AUTO PROMO | sent={sent} skipped={skipped}", flush=True)
             await asyncio.sleep(PROMO_INTERVAL)
         except Exception as e:
             print(f"❌ PROMO: {e}", flush=True)
@@ -2054,6 +2034,7 @@ async def auto_promo_task():
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
+    print(f"⏰ PROMO: every {PROMO_INTERVAL // 3600}h | cooldown {PROMO_CHAT_COOLDOWN // 60}min per chat", flush=True)
     try: asyncio.create_task(auto_promo_task())
     except: pass
     try: asyncio.create_task(cleanup_task())
