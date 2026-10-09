@@ -47,7 +47,6 @@ PROMO_CHAT_COOLDOWN = 60 * 60
 PROMO_MSG_THRESHOLD = 200
 GAME_TIMEOUT = 120
 
-# ================== State ==================
 username_cache = {}
 username_cache_ttl = {}
 spam_tracker = {}
@@ -58,11 +57,12 @@ group_info_cache = {}
 group_info_cache_ttl = {}
 save_counter = {"data": 0, "cache": 0}
 
-# Anti-repeat: {chat_id: {user_id: {"ids": [msg_ids], "last_ts": ts}}}
+# 🔁 ضد تکرار جدید: چک کردن پیام‌های مثل هم
+# {chat_id: {user_id: {"text": "last_text", "count": N, "ids": [msg_ids]}}}
 repeat_tracker = {}
-# Slow mode: {chat_id: {user_id: last_msg_ts}}
+# 🐌 حالت آهسته
 slow_tracker = {}
-# Coin flip games: {chat_id: {"player": user_id, "started_at": ts}}
+# 🪙 بازی شیر یا خط
 coin_flip_games = {}
 
 EMPTY = "⚫"
@@ -118,7 +118,6 @@ def get_games():
 
 
 async def game_timeout_check(chat_id, game_type):
-    """⏱️ چک تایم‌اوت بازی بعد از ۲ دقیقه"""
     try:
         await asyncio.sleep(GAME_TIMEOUT)
         if game_type == "connect4":
@@ -492,10 +491,8 @@ def mark_promo_sent(chat_id):
 
 
 def parse_slow_duration(text):
-    """تبدیل متن زمان به ثانیه"""
     text = text.strip()
-    # الگو: عدد + واحد
-    m = re.match(r'^(\d+)\s*(ثانیه|ثانیه|دقیقه|ساعت|روز|s|m|h|d)?$', text)
+    m = re.match(r'^(\d+)\s*(ثانیه|دقیقه|ساعت|روز|s|m|h|d)?$', text)
     if not m:
         return None
     num = int(m.group(1))
@@ -510,7 +507,6 @@ def parse_slow_duration(text):
         sec = num * 86400
     else:
         sec = num
-    # محدودیت: 5 ثانیه تا 1 روز
     if sec < 5: sec = 5
     if sec > 86400: sec = 86400
     return sec
@@ -697,7 +693,7 @@ async def get_group_list_text():
                 print(f"⚠️ group info {gid}: {e}", flush=True)
                 name = f"گروه #{i}"
                 link = None
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.1)
         text += f"{i}. 🏠 **{name}**\n"
         if link: text += f"   🔗 {link}\n"
         else: text += f"   🔗 بدون لینک\n"
@@ -749,8 +745,8 @@ def get_features_text():
         "├ 🔒 قفل گروه دستی\n"
         "├ ⏱️ قفل موقت (به ساعت)\n"
         "├ ⏰ قفل زمان‌بندی (روزانه)\n"
-        "├ 🔁 ضد تکرار (تنظیم ۲ تا ۱۰)\n"
-        "└ 🐌 حالت آهسته (تنظیم ۵ ثانیه تا ۱ روز)\n\n"
+        "├ 🔁 ضد تکرار هوشمند (پیام‌های یکسان)\n"
+        "└ 🐌 حالت آهسته (۵ ثانیه تا ۱ روز)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "👑 **مدیریت کاربران**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -911,9 +907,9 @@ def load_data():
         "group_locks": {}, "temp_locks": {}, "scheduled_locks": {}, "mute_list": {},
         "last_chat_promo": {},
         "custom_welcome": {},
-        "rules": {},  # 🆕 قوانین
-        "anti_repeat": {},  # 🆕 ضد تکرار {chat_id: limit}
-        "slow_mode": {},  # 🆕 حالت آهسته {chat_id: seconds}
+        "rules": {},
+        "anti_repeat": {},
+        "slow_mode": {},
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -1346,7 +1342,6 @@ def get_welcome_text(chat_id, chat_name, display_name):
 
 
 async def bulk_cleanup(chat_id, sender_id, limit):
-    """🧹 پاکسازی انبوه پیام‌های یک کاربر"""
     c = load_cache()
     if chat_id not in c:
         return 0, 0
@@ -1365,45 +1360,85 @@ async def bulk_cleanup(chat_id, sender_id, limit):
     return deleted, failed
 
 
-async def handle_repeat_check(chat_id, user_id, msg_id, limit, user_info):
-    """🔁 بررسی ضد تکرار"""
+# 🔁 ضد تکرار هوشمند: چک کردن پیام‌های یکسان و پشت سر هم
+async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
+    """
+    ضد تکرار هوشمند:
+    - فقط پیام‌های یکسان رو می‌شمره
+    - اگه پیام جدید فرق داشت، شمارنده ریست می‌شه
+    - وقتی به limit رسید، همه پیام‌های یکسان رو پاک می‌کنه
+    """
+    if not text:
+        # پیام‌های غیرمتنی رو نادیده بگیر
+        return False
+    
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    
     now = time.time()
     if chat_id not in repeat_tracker:
         repeat_tracker[chat_id] = {}
     if user_id not in repeat_tracker[chat_id]:
-        repeat_tracker[chat_id][user_id] = {"ids": [], "last_ts": now}
+        repeat_tracker[chat_id][user_id] = {"text": "", "count": 0, "ids": [], "last_ts": now}
+    
     tracker = repeat_tracker[chat_id][user_id]
+    
+    # اگه بیشتر از 30 ثانیه گذشته، ریست کن
     if now - tracker["last_ts"] > 30:
-        tracker["ids"] = []
-    tracker["ids"].append(str(msg_id))
-    tracker["last_ts"] = now
-    if len(tracker["ids"]) >= limit:
-        ids_to_delete = tracker["ids"][:]
-        tracker["ids"] = []
+        tracker["text"] = normalized
+        tracker["count"] = 1
+        tracker["ids"] = [str(msg_id)]
         tracker["last_ts"] = now
-        for mid in ids_to_delete:
+        return False
+    
+    # اگه متن جدید با متن قبلی یکسانه، بشمر
+    if tracker["text"] == normalized:
+        tracker["count"] += 1
+        tracker["ids"].append(str(msg_id))
+        tracker["last_ts"] = now
+        
+        # اگه به limit رسید، همه رو پاک کن
+        if tracker["count"] >= limit:
+            ids_to_delete = tracker["ids"][:]
+            # ریست
+            tracker["text"] = ""
+            tracker["count"] = 0
+            tracker["ids"] = []
+            tracker["last_ts"] = now
+            
+            # پاک کردن همه پیام‌ها
+            for mid in ids_to_delete:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=mid)
+                    await asyncio.sleep(0.2)
+                except Exception as e:
+                    print(f"⚠️ repeat delete {mid}: {e}", flush=True)
+            
+            # اطلاع دادن + اخطار
             try:
-                await bot.delete_message(chat_id=chat_id, message_id=mid)
-                await asyncio.sleep(0.2)
+                display = format_user_display(user_info, user_id)
+                if settings.get("warning"):
+                    await add_warning(chat_id, user_id, f"ارسال {limit} پیام یکسان پشت سر هم", user_info=user_info)
+                else:
+                    await bot.send_message(chat_id=chat_id, text=(
+                        f"🔁 **ضد تکرار فعال است!**\n\n"
+                        f"👤 {display}\n"
+                        f"📌 {limit} پیام یکسان شما پاک شد.\n\n⚡ **FLUXBOT**"))
             except Exception as e:
-                print(f"⚠️ repeat delete {mid}: {e}", flush=True)
-        try:
-            display = format_user_display(user_info, user_id)
-            if settings.get("warning"):
-                await add_warning(chat_id, user_id, f"ارسال {limit} پیام پشت سر هم", user_info=user_info)
-            else:
-                await bot.send_message(chat_id=chat_id, text=(
-                    f"🔁 **ضد تکرار فعال است!**\n\n"
-                    f"👤 {display}\n"
-                    f"📌 {limit} پیام شما پاک شد.\n\n⚡ **FLUXBOT**"))
-        except Exception as e:
-            print(f"⚠️ repeat warn: {e}", flush=True)
-        return True
+                print(f"⚠️ repeat warn: {e}", flush=True)
+            return True
+    else:
+        # متن جدید فرق داره، شمارنده رو ریست کن
+        tracker["text"] = normalized
+        tracker["count"] = 1
+        tracker["ids"] = [str(msg_id)]
+        tracker["last_ts"] = now
+    
     return False
 
 
 async def handle_slow_mode(chat_id, user_id, seconds, user_info):
-    """🐌 بررسی حالت آهسته"""
     now = time.time()
     if chat_id not in slow_tracker:
         slow_tracker[chat_id] = {}
@@ -1610,18 +1645,57 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=get_games_list_text())
             return
 
-        # 🆕 قوانین
+        # 🆕 قوانین - نمایش
         if clean_text == "قوانین":
             rules = bot_data.get("rules", {}).get(chat_id)
             if rules:
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                rules_text = (
                     "📜 **قوانین گروه**\n"
                     "━━━━━━━━━━━━━━━━━━━\n\n"
                     f"{rules}\n\n"
-                    "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"))
+                    "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+                )
+                if len(rules_text) > 800:
+                    await send_long_message(chat_id, rules_text, reply_to_message_id=message.message_id)
+                else:
+                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=rules_text)
+            else:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "ℹ️ **هنوز قوانینی تنظیم نشده!**\n\n"
+                    "مالک باید با دستور زیر تنظیم کنه:\n"
+                    "`تنظیم قوانین [متن]`"))
             return
 
-        cwm = re.match(r"^تنظیم\s+پیام\s+خوش\s*آمدگویی\s+(.+)$", clean_text)
+        # 🆕 تنظیم قوانین - با raw_text برای پشتیبانی از چندخطی
+        rtm = re.match(r"^تنظیم\s+قوانین\s+([\s\S]+)$", raw_text.strip())
+        if rtm:
+            if not is_owner_group: return
+            rules_text = rtm.group(1).strip()
+            if not rules_text:
+                await bot.send_message(chat_id=chat_id, text="⚠️ متن قوانین رو وارد کنید.", reply_to_message_id=message.message_id)
+                return
+            if "rules" not in bot_data: bot_data["rules"] = {}
+            bot_data["rules"][chat_id] = rules_text
+            save_data(bot_data, force=True)
+            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                "✅ **قوانین گروه ثبت شد!**\n\n"
+                "📌 برای نمایش: `قوانین`\n\n"
+                "⚡ **FLUXBOT**"))
+            return
+
+        if is_command(clean_text, "حذف قوانین", "پاک قوانین"):
+            if not is_owner_group: return
+            if "rules" not in bot_data: bot_data["rules"] = {}
+            if chat_id in bot_data["rules"]:
+                del bot_data["rules"][chat_id]
+                save_data(bot_data, force=True)
+                await bot.send_message(chat_id=chat_id, text="✅ **قوانین گروه حذف شد.**", reply_to_message_id=message.message_id)
+            else:
+                await bot.send_message(chat_id=chat_id, text="ℹ️ قوانینی تنظیم نشده.", reply_to_message_id=message.message_id)
+            return
+
+        # 🆕 تنظیم پیام خوش‌آمدگویی
+        cwm = re.match(r"^تنظیم\s+پیام\s+خوش\s*آمدگویی\s+([\s\S]+)$", raw_text.strip())
         if cwm:
             if not is_owner_group: return
             welcome_text = cwm.group(1).strip()
@@ -1656,34 +1730,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="ℹ️ پیام پیش‌فرض فعاله.")
             return
 
-        # 🆕 تنظیم قوانین
-        rtm = re.match(r"^تنظیم\s+قوانین\s+(.+)$", clean_text)
-        if rtm:
-            if not is_owner_group: return
-            rules_text = rtm.group(1).strip()
-            if not rules_text:
-                await bot.send_message(chat_id=chat_id, text="⚠️ متن قوانین رو وارد کنید.", reply_to_message_id=message.message_id)
-                return
-            if "rules" not in bot_data: bot_data["rules"] = {}
-            bot_data["rules"][chat_id] = rules_text
-            save_data(bot_data, force=True)
-            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                "✅ **قوانین گروه ثبت شد!**\n\n"
-                "📌 برای نمایش: `قوانین`\n\n"
-                "⚡ **FLUXBOT**"))
-            return
-
-        if is_command(clean_text, "حذف قوانین", "پاک قوانین"):
-            if not is_owner_group: return
-            if "rules" not in bot_data: bot_data["rules"] = {}
-            if chat_id in bot_data["rules"]:
-                del bot_data["rules"][chat_id]
-                save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, text="✅ **قوانین گروه حذف شد.**", reply_to_message_id=message.message_id)
-            else:
-                await bot.send_message(chat_id=chat_id, text="ℹ️ قوانینی تنظیم نشده.", reply_to_message_id=message.message_id)
-            return
-
         # 🆕 تنظیم ضد تکرار
         arm = re.match(r"^تنظیم\s+ضد\s+تکرار\s+(\d+)$", clean_text)
         if arm:
@@ -1697,8 +1743,9 @@ async def handle_message(bot, message):
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"✅ **ضد تکرار فعال شد!**\n\n"
-                f"📊 **حد:** {limit} پیام پشت سر هم\n"
-                f"⚠️ کاربر بعد از {limit} پیام، پاک می‌شه و اخطار می‌گیره.\n\n"
+                f"📊 **حد:** {limit} پیام یکسان پشت سر هم\n"
+                f"⚠️ کاربر بعد از {limit} پیام یکسان، پاک می‌شه و اخطار می‌گیره.\n"
+                f"💡 اگه پیامش فرق داشته باشه، شمارنده ریست می‌شه.\n\n"
                 f"⚡ **FLUXBOT**"))
             return
 
@@ -1754,8 +1801,8 @@ async def handle_message(bot, message):
         if bcm:
             if not can_manage: return
             limit = int(bcm.group(1))
-            if limit < 1 or limit > 100:
-                await bot.send_message(chat_id=chat_id, text="⚠️ عدد باید بین ۱ تا ۱۰۰ باشد.", reply_to_message_id=message.message_id)
+            if limit < 1 or limit > 500:
+                await bot.send_message(chat_id=chat_id, text="⚠️ عدد باید بین ۱ تا ۵۰۰ باشد.", reply_to_message_id=message.message_id)
                 return
             msg = await bot.send_message(chat_id=chat_id, text=f"🧹 در حال پاکسازی {limit} پیام...")
             deleted, failed = await bulk_cleanup(chat_id, sender_id, limit)
@@ -2086,7 +2133,7 @@ async def handle_message(bot, message):
                 s.append(f"🟡 زمان‌بندی:\n{sl}")
             else: s.append("🟢 زمان‌بندی: غیرفعال")
             ar = bot_data.get("anti_repeat", {}).get(chat_id)
-            s.append(f"🔁 ضد تکرار: {'🔴 ' + str(ar) + ' پیام' if ar else '🟢 غیرفعال'}")
+            s.append(f"🔁 ضد تکرار: {'🔴 ' + str(ar) + ' پیام یکسان' if ar else '🟢 غیرفعال'}")
             slow = bot_data.get("slow_mode", {}).get(chat_id)
             s.append(f"🐌 حالت آهسته: {'🔴 ' + format_duration(slow) if slow else '🟢 غیرفعال'}")
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
@@ -2107,7 +2154,7 @@ async def handle_message(bot, message):
                 bot_data["mute_list"][chat_id] = chat_mutes
                 save_data(bot_data, force=True)
 
-        # 🆕 حالت آهسته (فقط برای غیر مدیر)
+        # 🐌 حالت آهسته (فقط برای غیر مدیر)
         if not can_manage:
             slow_sec = bot_data.get("slow_mode", {}).get(chat_id)
             if slow_sec:
@@ -2119,11 +2166,11 @@ async def handle_message(bot, message):
                         await add_warning(chat_id, sender_id, "ارسال سریع در حالت آهسته", user_info=ui)
                     return
 
-        # 🆕 ضد تکرار (فقط برای غیر مدیر)
+        # 🔁 ضد تکرار هوشمند (فقط برای غیر مدیر)
         if not can_manage:
             ar_limit = bot_data.get("anti_repeat", {}).get(chat_id)
-            if ar_limit:
-                if await handle_repeat_check(chat_id, sender_id, msg_id, ar_limit, ui):
+            if ar_limit and raw_text:
+                if await handle_repeat_check(chat_id, sender_id, msg_id, raw_text, ar_limit, ui):
                     return
 
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
@@ -2384,7 +2431,7 @@ async def handle_message(bot, message):
                 wds = f"🟡 {m}د {s}ث" if m > 0 else f"🟡 {wda}ث"
             else: wds = "🟢"
             ar = bot_data.get("anti_repeat", {}).get(chat_id)
-            ars = f"🔴 {ar} پیام" if ar else "🟢 غیرفعال"
+            ars = f"🔴 {ar} پیام یکسان" if ar else "🟢 غیرفعال"
             slow = bot_data.get("slow_mode", {}).get(chat_id)
             slows = f"🔴 {format_duration(slow)}" if slow else "🟢 غیرفعال"
             rl = bot_data.get("rules", {}).get(chat_id)
