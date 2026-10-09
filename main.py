@@ -42,9 +42,6 @@ BTN_TOP_INVITERS = "🏆 لیست برتر دعوت‌کنندگان"
 MAX_FILTER_WORDS = 50
 
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
-PROMO_INTERVAL = 5 * 60 * 60
-PROMO_CHAT_COOLDOWN = 60 * 60
-PROMO_MSG_THRESHOLD = 200
 GAME_TIMEOUT = 120
 
 username_cache = {}
@@ -480,16 +477,6 @@ def get_top_inviters(limit=10):
     return sorted_list[:limit]
 
 
-def can_send_promo_to_chat(chat_id):
-    last = bot_data.get("last_chat_promo", {}).get(chat_id, 0)
-    return (time.time() - last) >= PROMO_CHAT_COOLDOWN
-
-
-def mark_promo_sent(chat_id):
-    if "last_chat_promo" not in bot_data: bot_data["last_chat_promo"] = {}
-    bot_data["last_chat_promo"][chat_id] = time.time()
-
-
 def parse_slow_duration(text):
     text = text.strip()
     m = re.match(r'^(\d+)\s*(ثانیه|دقیقه|ساعت|روز|s|m|h|d)?$', text)
@@ -806,7 +793,6 @@ def get_features_text():
         "├ 🚫 فیلتر کلمات (۵۰ کلمه)\n"
         "├ ❌ حذف از لیست فیلتر\n"
         "├ 📋 لیست کلمات فیلترشده\n"
-        "├ 📢 تبلیغ خودکار هر ۵ ساعت\n"
         "└ 📚 راهنمای کامل\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "👤 **دستورات کاربران**\n"
@@ -900,12 +886,10 @@ def load_data():
         "welcomed_users": {}, "user_titles": {}, "taken_asl": {}, "taken_laghab": {},
         "message_counts": {}, "join_dates": {}, "special_users": {}, "warnings": {},
         "warn_limit": {}, "warn_delete_after": {}, "started_users": [], "known_groups": [],
-        "group_message_count": {}, "promo_sent": {}, "filtered_words": {}, "banned_users": {},
-        "last_promo_time": {},
+        "group_message_count": {}, "filtered_words": {}, "banned_users": {},
         "invite_codes": {}, "code_to_user": {}, "points": {}, "invited_users": {},
         "known_users": {}, "games": {},
         "group_locks": {}, "temp_locks": {}, "scheduled_locks": {}, "mute_list": {},
-        "last_chat_promo": {},
         "custom_welcome": {},
         "rules": {},
         "anti_repeat": {},
@@ -914,7 +898,6 @@ def load_data():
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
             "profanity": True, "forward": False, "gif": False, "goodbye": False,
-            "auto_promo": True,
         },
     }
     for path in DATA_PATHS:
@@ -954,7 +937,7 @@ bot_is_active = True
 bot_data = load_data()
 settings = bot_data.get("settings", {})
 for sk in ["link", "id", "spam", "hyperlink", "warning", "filter", "auto_ban",
-           "profanity", "forward", "gif", "goodbye", "auto_promo"]:
+           "profanity", "forward", "gif", "goodbye"]:
     if sk not in settings: settings[sk] = False
 if "welcome" not in settings: settings["welcome"] = True
 message_cache = load_cache()
@@ -1176,17 +1159,6 @@ def get_channel_text():
     return "📢 **کانال رسمی FluxBot**\n\n➣ **@RPCITY_PHANTOM**\n\n🌟 لطفاً در کانال رسمی ما عضو شوید. 🙏\n\n⚡ **FLUXBOT**"
 
 
-def get_promo_text():
-    return (
-        "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
-        "💎 **از مدیریت حرفه‌ای لذت می‌برید؟**\n\n"
-        "🎁 برای حمایت از ما لطفاً در کانال رسمی عضو شوید:\n"
-        "📢 **@RPCITY_PHANTOM**\n\n"
-        "💖 **عضویت شما، انگیزه ماست.**\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
-    )
-
-
 def get_education_text():
     return (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   📚 آموزش فعال‌سازی 📚\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
@@ -1369,7 +1341,6 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
     - وقتی به limit رسید، همه پیام‌های یکسان رو پاک می‌کنه
     """
     if not text:
-        # پیام‌های غیرمتنی رو نادیده بگیر
         return False
     
     normalized = normalize_text(text)
@@ -1384,7 +1355,6 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
     
     tracker = repeat_tracker[chat_id][user_id]
     
-    # اگه بیشتر از 30 ثانیه گذشته، ریست کن
     if now - tracker["last_ts"] > 30:
         tracker["text"] = normalized
         tracker["count"] = 1
@@ -1392,22 +1362,18 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
         tracker["last_ts"] = now
         return False
     
-    # اگه متن جدید با متن قبلی یکسانه، بشمر
     if tracker["text"] == normalized:
         tracker["count"] += 1
         tracker["ids"].append(str(msg_id))
         tracker["last_ts"] = now
         
-        # اگه به limit رسید، همه رو پاک کن
         if tracker["count"] >= limit:
             ids_to_delete = tracker["ids"][:]
-            # ریست
             tracker["text"] = ""
             tracker["count"] = 0
             tracker["ids"] = []
             tracker["last_ts"] = now
             
-            # پاک کردن همه پیام‌ها
             for mid in ids_to_delete:
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=mid)
@@ -1415,7 +1381,6 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
                 except Exception as e:
                     print(f"⚠️ repeat delete {mid}: {e}", flush=True)
             
-            # اطلاع دادن + اخطار
             try:
                 display = format_user_display(user_info, user_id)
                 if settings.get("warning"):
@@ -1429,7 +1394,6 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
                 print(f"⚠️ repeat warn: {e}", flush=True)
             return True
     else:
-        # متن جدید فرق داره، شمارنده رو ریست کن
         tracker["text"] = normalized
         tracker["count"] = 1
         tracker["ids"] = [str(msg_id)]
@@ -1503,6 +1467,61 @@ async def handle_message(bot, message):
             text_dedup[dedup_key] = ct
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
+
+        # ============ 📢 ارسال پیام همگانی (فقط مالک) ============
+        broadcast_match = re.match(r"^ارسال\s+پیام\s+همگانی\s+گروه\s+([\s\S]+)$", raw_text.strip())
+        if broadcast_match:
+            if not is_owner_check:
+                # غیر مالک: بی‌صدا نادیده بگیر
+                return
+            broadcast_text = broadcast_match.group(1).strip()
+            if not broadcast_text:
+                try:
+                    await bot.send_message(chat_id=chat_id, text="⚠️ متن پیام رو وارد کن.\n\nمثال:\n`ارسال پیام همگانی گروه سلام به همه`")
+                except: pass
+                return
+            
+            groups = ensure_list(bot_data.get("known_groups", []))
+            if not groups:
+                try:
+                    await bot.send_message(chat_id=chat_id, text="📭 ربات توی هیچ گروهی عضو نیست.")
+                except: pass
+                return
+            
+            status_msg = None
+            try:
+                status_msg = await bot.send_message(chat_id=chat_id, text=f"📢 در حال ارسال به {len(groups)} گروه...")
+            except: pass
+            
+            sent = 0
+            failed = 0
+            for gid in groups:
+                try:
+                    await bot.send_message(chat_id=gid, text=broadcast_text)
+                    sent += 1
+                    await asyncio.sleep(1.5)
+                except Exception as e:
+                    failed += 1
+                    print(f"⚠️ broadcast {gid}: {e}", flush=True)
+            
+            # حذف پیام وضعیت
+            try:
+                if status_msg:
+                    mid = extract_msg_id(status_msg)
+                    if mid:
+                        await bot.delete_message(chat_id=chat_id, message_id=mid)
+            except: pass
+            
+            try:
+                await bot.send_message(chat_id=chat_id, text=(
+                    f"✅ **ارسال همگانی انجام شد!**\n\n"
+                    f"📤 موفق: **{sent}**\n"
+                    f"❌ ناموفق: **{failed}**\n"
+                    f"📊 کل گروه‌ها: **{len(groups)}**\n\n"
+                    f"⚡ **FLUXBOT**"
+                ))
+            except: pass
+            return
 
         # ============ پیوی ============
         if is_private_chat(chat_id):
@@ -1618,7 +1637,6 @@ async def handle_message(bot, message):
 
         games = get_games()
 
-        # 🪙 بازی شیر یا خط - بررسی پاسخ
         if chat_id in coin_flip_games:
             cf = coin_flip_games[chat_id]
             if str(sender_id) == cf["player"] and raw_text in ("شیر", "خط"):
@@ -1645,7 +1663,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=get_games_list_text())
             return
 
-        # 🆕 قوانین - نمایش
         if clean_text == "قوانین":
             rules = bot_data.get("rules", {}).get(chat_id)
             if rules:
@@ -1666,7 +1683,6 @@ async def handle_message(bot, message):
                     "`تنظیم قوانین [متن]`"))
             return
 
-        # 🆕 تنظیم قوانین - با raw_text برای پشتیبانی از چندخطی
         rtm = re.match(r"^تنظیم\s+قوانین\s+([\s\S]+)$", raw_text.strip())
         if rtm:
             if not is_owner_group: return
@@ -1694,7 +1710,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text="ℹ️ قوانینی تنظیم نشده.", reply_to_message_id=message.message_id)
             return
 
-        # 🆕 تنظیم پیام خوش‌آمدگویی
         cwm = re.match(r"^تنظیم\s+پیام\s+خوش\s*آمدگویی\s+([\s\S]+)$", raw_text.strip())
         if cwm:
             if not is_owner_group: return
@@ -1730,7 +1745,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="ℹ️ پیام پیش‌فرض فعاله.")
             return
 
-        # 🆕 تنظیم ضد تکرار
         arm = re.match(r"^تنظیم\s+ضد\s+تکرار\s+(\d+)$", clean_text)
         if arm:
             if not is_owner_group: return
@@ -1760,7 +1774,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text="✅ **ضد تکرار غیرفعال شد.**", reply_to_message_id=message.message_id)
             return
 
-        # 🆕 تنظیم حالت آهسته
         smm = re.match(r"^تنظیم\s+حالت\s+آهسته\s+(.+)$", clean_text)
         if smm:
             if not is_owner_group: return
@@ -1796,7 +1809,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text="✅ **حالت آهسته غیرفعال شد.**", reply_to_message_id=message.message_id)
             return
 
-        # 🆕 پاکسازی انبوه
         bcm = re.match(r"^پاکسازی\s+(\d+)$", clean_text)
         if bcm:
             if not can_manage: return
@@ -1817,7 +1829,6 @@ async def handle_message(bot, message):
                 f"⚡ **FLUXBOT**"), reply_to_message_id=message.message_id)
             return
 
-        # 🎮 بازی دوز
         game_start_match = re.match(r"^(دوز|بازی دوز)\s*(قرمز|زرد)?$", clean_text)
         if game_start_match:
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
@@ -1837,7 +1848,6 @@ async def handle_message(bot, message):
                 f"⏱️ اگه ۲ دقیقه کسی نیاد، خودکار لغو می‌شه.\n\n⚡ **FLUXBOT**"))
             return
 
-        # 🪙 شروع بازی شیر یا خط
         if clean_text in ("بازی شیر یا خط", "شیر یا خط", "شیریا خط"):
             if chat_id in coin_flip_games:
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
@@ -1940,7 +1950,6 @@ async def handle_message(bot, message):
                         f"🎯 **نوبت:** {next_name} ({next_color})"))
                     return
 
-        # === دستورات ===
         if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands"):
             await send_long_message(chat_id, get_help_text(), reply_to_message_id=message.message_id)
             return
@@ -2154,7 +2163,6 @@ async def handle_message(bot, message):
                 bot_data["mute_list"][chat_id] = chat_mutes
                 save_data(bot_data, force=True)
 
-        # 🐌 حالت آهسته (فقط برای غیر مدیر)
         if not can_manage:
             slow_sec = bot_data.get("slow_mode", {}).get(chat_id)
             if slow_sec:
@@ -2166,7 +2174,6 @@ async def handle_message(bot, message):
                         await add_warning(chat_id, sender_id, "ارسال سریع در حالت آهسته", user_info=ui)
                     return
 
-        # 🔁 ضد تکرار هوشمند (فقط برای غیر مدیر)
         if not can_manage:
             ar_limit = bot_data.get("anti_repeat", {}).get(chat_id)
             if ar_limit and raw_text:
@@ -2175,20 +2182,7 @@ async def handle_message(bot, message):
 
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
-        if bot_data["group_message_count"][chat_id] >= PROMO_MSG_THRESHOLD:
-            bot_data["group_message_count"][chat_id] = 0
-            save_data(bot_data, force=True)
-            if can_send_promo_to_chat(chat_id):
-                try:
-                    await bot.send_message(chat_id=chat_id, text=get_promo_text())
-                    mark_promo_sent(chat_id)
-                    save_data(bot_data, force=True)
-                    print(f"📢 200-MSG PROMO sent to {chat_id}", flush=True)
-                except Exception as e:
-                    print(f"⚠️ promo 200msg: {e}", flush=True)
-            else:
-                print(f"⏸️ Promo skipped (cooldown)", flush=True)
-        else: save_data(bot_data)
+        save_data(bot_data)
 
         if settings.get("welcome", True) and bot_is_active:
             welcomed = bot_data.get("welcomed_users", {}).get(chat_id, {})
@@ -2594,44 +2588,9 @@ async def handle_message(bot, message):
         except: pass
 
 
-async def auto_promo_task():
-    print(f"⏰ AUTO PROMO STARTED (every {PROMO_INTERVAL // 3600} hours)", flush=True)
-    await asyncio.sleep(180)
-    while True:
-        try:
-            if not bot_data.get("settings", {}).get("auto_promo", True):
-                await asyncio.sleep(300)
-                continue
-            groups = ensure_list(bot_data.get("known_groups", []))
-            sent = 0
-            skipped = 0
-            for gid in groups:
-                if not can_send_promo_to_chat(gid):
-                    skipped += 1
-                    continue
-                try:
-                    await bot.send_message(chat_id=gid, text=get_promo_text())
-                    mark_promo_sent(gid)
-                    sent += 1
-                    save_data(bot_data, force=True)
-                    await asyncio.sleep(3)
-                except Exception as e:
-                    print(f"⚠️ promo {gid}: {e}", flush=True)
-            bot_data["last_promo_time"] = {"time": time.time(), "sent": sent, "skipped": skipped}
-            save_data(bot_data, force=True)
-            print(f"💤 AUTO PROMO | sent={sent} skipped={skipped}", flush=True)
-            await asyncio.sleep(PROMO_INTERVAL)
-        except Exception as e:
-            print(f"❌ PROMO: {e}", flush=True)
-            await asyncio.sleep(60)
-
-
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
-    print(f"⏰ PROMO: every {PROMO_INTERVAL // 3600}h", flush=True)
-    try: asyncio.create_task(auto_promo_task())
-    except: pass
     try: asyncio.create_task(cleanup_task())
     except: pass
     try: await bot.run()
