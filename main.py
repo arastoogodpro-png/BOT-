@@ -45,7 +45,9 @@ CHANNEL_USERNAME = "@RPCITY_PHANTOM"
 PROMO_INTERVAL = 5 * 60 * 60
 PROMO_CHAT_COOLDOWN = 60 * 60
 PROMO_MSG_THRESHOLD = 200
+GAME_TIMEOUT = 120
 
+# ================== State ==================
 username_cache = {}
 username_cache_ttl = {}
 spam_tracker = {}
@@ -56,12 +58,19 @@ group_info_cache = {}
 group_info_cache_ttl = {}
 save_counter = {"data": 0, "cache": 0}
 
+# Anti-repeat: {chat_id: {user_id: {"ids": [msg_ids], "last_ts": ts}}}
+repeat_tracker = {}
+# Slow mode: {chat_id: {user_id: last_msg_ts}}
+slow_tracker = {}
+# Coin flip games: {chat_id: {"player": user_id, "started_at": ts}}
+coin_flip_games = {}
+
 EMPTY = "⚫"
 RED = "🔴"
 YELLOW = "🟡"
 
 
-# ================== Game ==================
+# ================== Game Functions ==================
 def render_board(board):
     lines = ["1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣"]
     for row in board:
@@ -108,6 +117,32 @@ def get_games():
     return bot_data["games"]
 
 
+async def game_timeout_check(chat_id, game_type):
+    """⏱️ چک تایم‌اوت بازی بعد از ۲ دقیقه"""
+    try:
+        await asyncio.sleep(GAME_TIMEOUT)
+        if game_type == "connect4":
+            games = get_games()
+            if chat_id in games and games[chat_id].get("status") == "waiting":
+                del games[chat_id]
+                save_data(bot_data, force=True)
+                try:
+                    await bot.send_message(chat_id=chat_id, text=(
+                        "⏱️ **زمان بازی به پایان رسید!**\n\n"
+                        "هیچ‌کس شرکت نکرد و بازی لغو شد.\n\n⚡ **FLUXBOT**"))
+                except: pass
+        elif game_type == "coinflip":
+            if chat_id in coin_flip_games:
+                del coin_flip_games[chat_id]
+                try:
+                    await bot.send_message(chat_id=chat_id, text=(
+                        "⏱️ **زمان انتخاب به پایان رسید!**\n\n"
+                        "بازی شیر یا خط لغو شد.\n\n⚡ **FLUXBOT**"))
+                except: pass
+    except Exception as e:
+        print(f"⚠️ game_timeout: {e}", flush=True)
+
+
 async def start_game(chat_id, sender_id, sender_display, color_choice):
     games = get_games()
     if chat_id in games:
@@ -124,6 +159,8 @@ async def start_game(chat_id, sender_id, sender_display, color_choice):
         "started_at": time.time(),
     }
     save_data(bot_data, force=True)
+    try: asyncio.create_task(game_timeout_check(chat_id, "connect4"))
+    except: pass
     return games[chat_id]
 
 
@@ -454,6 +491,38 @@ def mark_promo_sent(chat_id):
     bot_data["last_chat_promo"][chat_id] = time.time()
 
 
+def parse_slow_duration(text):
+    """تبدیل متن زمان به ثانیه"""
+    text = text.strip()
+    # الگو: عدد + واحد
+    m = re.match(r'^(\d+)\s*(ثانیه|ثانیه|دقیقه|ساعت|روز|s|m|h|d)?$', text)
+    if not m:
+        return None
+    num = int(m.group(1))
+    unit = (m.group(2) or "ثانیه").lower()
+    if unit in ("ثانیه", "s", ""):
+        sec = num
+    elif unit in ("دقیقه", "m"):
+        sec = num * 60
+    elif unit in ("ساعت", "h"):
+        sec = num * 3600
+    elif unit in ("روز", "d"):
+        sec = num * 86400
+    else:
+        sec = num
+    # محدودیت: 5 ثانیه تا 1 روز
+    if sec < 5: sec = 5
+    if sec > 86400: sec = 86400
+    return sec
+
+
+def format_duration(sec):
+    if sec < 60: return f"{sec} ثانیه"
+    if sec < 3600: return f"{sec // 60} دقیقه" + (f" و {sec % 60} ثانیه" if sec % 60 else "")
+    if sec < 86400: return f"{sec // 3600} ساعت" + (f" و {(sec % 3600) // 60} دقیقه" if sec % 3600 else "")
+    return f"{sec // 86400} روز"
+
+
 PROFANITY_LIST = [
     "کص","کیر","کون","کسکش","کس کش","کصکش","کص کش","خارکصه","خار کصه","خارکسه",
     "بیناموس","بی ناموس","جنده","حرومزاده","حروم زاده","مادرت","مادرتو","مادر خراب",
@@ -649,8 +718,11 @@ def get_games_list_text():
         "├ 👥 پیوستن: `شرکت`\n"
         "├ 🎯 انداختن: عدد `1` تا `7`\n"
         "└ 🚫 لغو: `انصراف`\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "🎮 بازی‌های دیگه به زودی!\n\n"
+        "🪙 **بازی شیر یا خط**\n"
+        "├ 📌 شروع: `بازی شیر یا خط`\n"
+        "├ 🎯 انتخاب: `شیر` یا `خط`\n"
+        "└ 🎲 نتیجه تصادفی\n\n"
+        "⏱️ **نکته:** اگه بعد ۲ دقیقه کسی بازی نکنه، خودکار لغو می‌شه.\n\n"
         "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
     )
 
@@ -676,7 +748,9 @@ def get_features_text():
         "├ 👋 قفل خوش‌آمدگویی\n"
         "├ 🔒 قفل گروه دستی\n"
         "├ ⏱️ قفل موقت (به ساعت)\n"
-        "└ ⏰ قفل زمان‌بندی (روزانه)\n\n"
+        "├ ⏰ قفل زمان‌بندی (روزانه)\n"
+        "├ 🔁 ضد تکرار (تنظیم ۲ تا ۱۰)\n"
+        "└ 🐌 حالت آهسته (تنظیم ۵ ثانیه تا ۱ روز)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "👑 **مدیریت کاربران**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -690,9 +764,16 @@ def get_features_text():
         "├ 🚫 دستور بن/سیک/اخراج\n"
         "└ ✅ دستور آنبن\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
+        "📜 **قوانین گروه**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📝 تنظیم قوانین با دستور\n"
+        "├ 📋 نمایش قوانین به همه\n"
+        "└ ❌ حذف قوانین\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "🎮 **بازی و سرگرمی**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 🎲 بازی دوز چهارتایی (دو نفره)\n"
+        "├ 🪙 بازی شیر یا خط (شانسی)\n"
         "├ 😂 جک و جوک\n"
         "├ 📜 ضرب‌المثل\n"
         "├ 💡 دانستی\n"
@@ -700,8 +781,7 @@ def get_features_text():
         "├ 💚 پند و اندرز (پ ن پ)\n"
         "├ 📝 شعر\n"
         "├ 🔮 فال حافظ\n"
-        "├ 🍀 شانس امروز\n"
-        "└ 🎮 لیست بازی‌ها\n\n"
+        "└ 🍀 شانس امروز\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "📊 **پروفایل و آمار**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -720,17 +800,17 @@ def get_features_text():
         "├ 🎟️ سیستم ثبت کد دعوت\n"
         "├ ⭐ امتیاز به ازای هر دعوت\n"
         "├ 🏆 جدول برترین دعوت‌کنندگان\n"
-        "└ 💎 امتیاز دو طرف (دعوت‌کننده و دعوت‌شده)\n\n"
+        "└ 💎 امتیاز دو طرف\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚙️ **ابزارهای مدیریتی**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 🗑️ حذف فوری پیام\n"
         "├ ⏱️ حذف با تایمر (به دقیقه)\n"
+        "├ 🧹 پاکسازی انبوه پیام‌ها\n"
         "├ 🚫 فیلتر کلمات (۵۰ کلمه)\n"
         "├ ❌ حذف از لیست فیلتر\n"
         "├ 📋 لیست کلمات فیلترشده\n"
         "├ 📢 تبلیغ خودکار هر ۵ ساعت\n"
-        "├ 🎯 تبلیغ ۲۰۰ پیامی با کول‌داون\n"
         "└ 📚 راهنمای کامل\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "👤 **دستورات کاربران**\n"
@@ -739,6 +819,7 @@ def get_features_text():
         "├ `پروفایل` یا `آمار` → پروفایل\n"
         "├ `تاپ` → برترین‌های گروه\n"
         "├ `ساعت` → ساعت و تاریخ\n"
+        "├ `قوانین` → نمایش قوانین\n"
         "├ `تنظیم اصل [نام]`\n"
         "├ `تنظیم لقب [نام]`\n"
         "├ `جک` / `ضرب المثل`\n"
@@ -749,43 +830,24 @@ def get_features_text():
         "━━━━━━━━━━━━━━━━━━━\n"
         "👑 **دستورات مالک / ویژه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ `فعال` / `غیرفعال` → روشن/خاموش\n"
-        "├ `بن` / `سیک` / `اخراج` (ریپلای)\n"
-        "├ `انبن` (ریپلای)\n"
-        "├ `سکوت [دقیقه]` (ریپلای)\n"
-        "├ `اخطار` (ریپلای)\n"
-        "├ `حذف اخطار` (ریپلای)\n"
-        "├ `حذف اخطار [عدد]` (ریپلای)\n"
+        "├ `فعال` / `غیرفعال`\n"
+        "├ `بن` / `سیک` / `اخراج`\n"
+        "├ `انبن` / `آنبن`\n"
+        "├ `سکوت [دقیقه]`\n"
+        "├ `اخطار` / `حذف اخطار`\n"
         "├ `تنظیم اخطار [عدد]`\n"
-        "├ `حذف پیام اخطار [ثانیه]`\n"
-        "├ `ویژه` (ریپلای)\n"
-        "├ `حذف ویژه` (ریپلای)\n"
-        "├ `فیلتر [کلمه]`\n"
-        "├ `حذف فیلتر [کلمه]`\n"
-        "├ `لیست فیلتر`\n"
-        "├ `حذف` (ریپلای) → حذف فوری\n"
-        "├ `حذف [دقیقه]` (ریپلای)\n"
-        "├ `قفل گروه` / `باز`\n"
-        "├ `قفل [ساعت]`\n"
-        "├ `قفل 13:00 14:00`\n"
-        "├ `لیست قفل گروه`\n"
-        "└ `لیست گروه ها` (فقط مالک توی پیوی)\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "👋 **خوش‌آمدگویی سفارشی**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
         "├ `تنظیم پیام خوش آمدگویی [متن]`\n"
-        "├ `حذف پیام خوش آمدگویی`\n"
-        "└ `نمایش پیام خوش آمدگویی`\n"
-        "💡 متغیرها: {name}، {group}، {time}\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "🎮 **بازی دوز چهارتایی**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "├ `دوز` → شروع بازی\n"
-        "├ `دوز قرمز` / `دوز زرد` → انتخاب رنگ\n"
-        "├ `شرکت` → پیوستن به بازی\n"
-        "├ `1` تا `7` → انداختن مهره\n"
-        "├ `انصراف` → لغو بازی\n"
-        "└ 🏆 ۴ مهره پشت سر هم = برد\n\n"
+        "├ `تنظیم قوانین [متن]`\n"
+        "├ `تنظیم ضد تکرار [۲ تا ۱۰]`\n"
+        "├ `ضد تکرار بسته`\n"
+        "├ `تنظیم حالت آهسته [زمان]`\n"
+        "├ `حالت آهسته بسته`\n"
+        "├ `ویژه` / `حذف ویژه`\n"
+        "├ `فیلتر [کلمه]`\n"
+        "├ `حذف` / `حذف [دقیقه]`\n"
+        "├ `پاکسازی [عدد]` → پاکسازی انبوه\n"
+        "├ `قفل گروه` / `باز`\n"
+        "└ `لیست گروه ها` (فقط مالک)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "✨ **چرا FluxBot؟**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -798,10 +860,8 @@ def get_features_text():
         "📊 گزارش‌گیری دقیق\n"
         "💾 حفظ کامل اطلاعات\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🔗 **ربات رو به گروهت اضافه کن:**\n"
-        "👉 **@Flux1bot**\n\n"
-        "📢 **کانال رسمی:**\n"
-        "➣ **@RPCITY_PHANTOM**\n"
+        "🔗 **@Flux1bot**\n"
+        "📢 **@RPCITY_PHANTOM**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **FLUXBOT** | 🌊 **جریان قدرت**"
     )
@@ -851,6 +911,9 @@ def load_data():
         "group_locks": {}, "temp_locks": {}, "scheduled_locks": {}, "mute_list": {},
         "last_chat_promo": {},
         "custom_welcome": {},
+        "rules": {},  # 🆕 قوانین
+        "anti_repeat": {},  # 🆕 ضد تکرار {chat_id: limit}
+        "slow_mode": {},  # 🆕 حالت آهسته {chat_id: seconds}
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -1163,6 +1226,7 @@ def get_help_text():
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   📚 راهنما 📚\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         "👤 **کاربران:**\n"
         "├ 👑 `مقام`\n├ 📊 `پروفایل`\n├ 🏆 `آمار گروه`\n├ ⏰ `ساعت`\n"
+        "├ 📜 `قوانین`\n"
         "├ 🐺 `تنظیم اصل [نام]`\n├ 🎭 `تنظیم لقب [نام]`\n"
         "├ 🎟️ `زدن کد دعوت`\n├ 🎫 `کد دعوت من`\n├ ⭐ `امتیاز من`\n"
         "├ 📖 `قابلیت‌های ربات`\n"
@@ -1170,31 +1234,34 @@ def get_help_text():
         "├ 😂 `جک` / 📜 `ضرب المثل`\n├ 💡 `دانستی` / 🧠 `فکت`\n"
         "├ 💚 `پ ن پ` / 📝 `شعر`\n├ 🔮 `فال` / 🍀 `شانس`\n"
         "└ 📚 `راهنما`\n\n"
-        "🎮 **بازی دوز (فقط گروه):**\n"
-        "├ `دوز` → شروع\n├ `شرکت` → پیوستن\n"
-        "├ `1` تا `7` → انداختن\n└ `انصراف` → لغو\n\n"
+        "🎮 **بازی‌ها (گروه):**\n"
+        "├ 🎲 `دوز` / `دوز قرمز` / `دوز زرد`\n"
+        "├ 👥 `شرکت` → پیوستن\n"
+        "├ 🎯 `1` تا `7` → انداختن مهره\n"
+        "├ 🪙 `بازی شیر یا خط` → بازی شانسی\n"
+        "└ 🚫 `انصراف` → لغو\n\n"
         "👑 **مالک / ویژه:**\n"
-        "├ ✅ `فعال` / 🛑 `غیرفعال`\n├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
-        "├ ✅ `انبن` (ریپلای)\n├ 🔇 `سکوت [دقیقه]` (ریپلای)\n"
-        "├ ⚠️ `اخطار` (ریپلای)\n├ ❌ `حذف اخطار` (ریپلای)\n"
-        "├ ❌ `حذف اخطار [عدد]` (ریپلای)\n├ ⚙️ `تنظیم اخطار [عدد]`\n"
-        "├ ⏱️ `حذف پیام اخطار [ثانیه]`\n├ ⭐ `ویژه` (ریپلای)\n"
-        "├ ❌ `حذف ویژه` (ریپلای)\n├ 🚫 `فیلتر [کلمه]`\n└ 📋 `لیست فیلتر`\n\n"
-        "👋 **خوش‌آمدگویی سفارشی:**\n"
-        "├ `تنظیم پیام خوش آمدگویی [متن]`\n"
-        "├ `حذف پیام خوش آمدگویی`\n"
-        "└ `نمایش پیام خوش آمدگویی`\n\n"
-        "🗑️ **مدیریت پیام:**\n"
-        "├ 🗑️ `حذف` (ریپلای)\n└ ⏱️ `حذف [دقیقه]` (ریپلای)\n\n"
-        "🔒 **قفل گروه:**\n"
-        "├ 🔒 `قفل گروه`\n├ ⏱️ `قفل [ساعت]`\n├ ⏰ `قفل 13:00 14:00`\n"
-        "├ 🔓 `باز`\n└ 📋 `لیست قفل گروه`\n\n"
-        "⚙️ **قفل‌ها:**\n"
-        "├ 🔗 `لینک` / 🆔 `آیدی`\n├ 📢 `اسپم` / 🔗 `هایپرلینک`\n"
-        "├ 🤬 `فحش` / 📨 `فوروارد`\n├ 🎞️ `گیف` / 👋 `خداحافظی`\n"
-        "└ 📋 `لیست قفل`\n\n"
-        "📋 **دستور مالک خاص:**\n"
-        "└ `لیست گروه ها` (توی پیوی)\n\n"
+        "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
+        "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
+        "├ ✅ `انبن` (ریپلای)\n"
+        "├ 🔇 `سکوت [دقیقه]` (ریپلای)\n"
+        "├ ⚠️ `اخطار` (ریپلای)\n"
+        "├ ❌ `حذف اخطار` (ریپلای)\n"
+        "├ ❌ `حذف اخطار [عدد]` (ریپلای)\n"
+        "├ ⚙️ `تنظیم اخطار [عدد]`\n"
+        "├ ⏱️ `حذف پیام اخطار [ثانیه]`\n"
+        "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
+        "├ 🚫 `فیلتر [کلمه]`\n"
+        "├ 📋 `لیست فیلتر`\n"
+        "├ 📝 `تنظیم قوانین [متن]`\n"
+        "├ 📋 `نمایش قوانین` / ❌ `حذف قوانین`\n"
+        "├ 🔁 `تنظیم ضد تکرار [۲-۱۰]`\n"
+        "├ ❌ `ضد تکرار بسته`\n"
+        "├ 🐌 `تنظیم حالت آهسته [زمان]`\n"
+        "│   مثال: `5 ثانیه` / `1 دقیقه` / `1 ساعت` / `1 روز`\n"
+        "├ ❌ `حالت آهسته بسته`\n"
+        "├ 🧹 `پاکسازی [عدد]` → پاکسازی انبوه\n"
+        "└ 📋 `لیست گروه ها` (توی پیوی)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
     )
 
@@ -1260,16 +1327,13 @@ async def process_invite_code(chat_id, user_id, code):
 
 
 def get_welcome_text(chat_id, chat_name, display_name):
-    """🆕 متن خوش‌آمدگویی سفارشی یا پیش‌فرض"""
     custom = bot_data.get("custom_welcome", {}).get(chat_id)
     now_str = get_now_time()
     if custom:
-        # جایگزینی متغیرها
         text = custom.replace("{name}", display_name)
         text = text.replace("{group}", chat_name)
         text = text.replace("{time}", now_str)
         return text
-    # پیش‌فرض
     return (
         f"╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         f"🌟 **به گروه {chat_name} خوش آمدید!** 🌟\n\n"
@@ -1277,8 +1341,78 @@ def get_welcome_text(chat_id, chat_name, display_name):
         f"⏰ **ورود:** {now_str}\n\n"
         f"💎 **امکانات:**\n"
         f"├ 📊 `پروفایل`\n├ 🎮 `دوز`\n"
-        f"├ 🐺 `تنظیم اصل [نام]`\n└ 📚 `راهنما`\n\n⚡ **FLUXBOT**"
+        f"├ 📜 `قوانین`\n└ 📚 `راهنما`\n\n⚡ **FLUXBOT**"
     )
+
+
+async def bulk_cleanup(chat_id, sender_id, limit):
+    """🧹 پاکسازی انبوه پیام‌های یک کاربر"""
+    c = load_cache()
+    if chat_id not in c:
+        return 0, 0
+    msgs = [(mid, sid) for mid, sid in c[chat_id].items() if str(sid) == str(sender_id)]
+    msgs.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0, reverse=True)
+    deleted = 0
+    failed = 0
+    for mid, _ in msgs[:limit]:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+            deleted += 1
+            await asyncio.sleep(0.25)
+        except Exception as e:
+            failed += 1
+            print(f"⚠️ bulk delete {mid}: {e}", flush=True)
+    return deleted, failed
+
+
+async def handle_repeat_check(chat_id, user_id, msg_id, limit, user_info):
+    """🔁 بررسی ضد تکرار"""
+    now = time.time()
+    if chat_id not in repeat_tracker:
+        repeat_tracker[chat_id] = {}
+    if user_id not in repeat_tracker[chat_id]:
+        repeat_tracker[chat_id][user_id] = {"ids": [], "last_ts": now}
+    tracker = repeat_tracker[chat_id][user_id]
+    if now - tracker["last_ts"] > 30:
+        tracker["ids"] = []
+    tracker["ids"].append(str(msg_id))
+    tracker["last_ts"] = now
+    if len(tracker["ids"]) >= limit:
+        ids_to_delete = tracker["ids"][:]
+        tracker["ids"] = []
+        tracker["last_ts"] = now
+        for mid in ids_to_delete:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=mid)
+                await asyncio.sleep(0.2)
+            except Exception as e:
+                print(f"⚠️ repeat delete {mid}: {e}", flush=True)
+        try:
+            display = format_user_display(user_info, user_id)
+            if settings.get("warning"):
+                await add_warning(chat_id, user_id, f"ارسال {limit} پیام پشت سر هم", user_info=user_info)
+            else:
+                await bot.send_message(chat_id=chat_id, text=(
+                    f"🔁 **ضد تکرار فعال است!**\n\n"
+                    f"👤 {display}\n"
+                    f"📌 {limit} پیام شما پاک شد.\n\n⚡ **FLUXBOT**"))
+        except Exception as e:
+            print(f"⚠️ repeat warn: {e}", flush=True)
+        return True
+    return False
+
+
+async def handle_slow_mode(chat_id, user_id, seconds, user_info):
+    """🐌 بررسی حالت آهسته"""
+    now = time.time()
+    if chat_id not in slow_tracker:
+        slow_tracker[chat_id] = {}
+    last = slow_tracker[chat_id].get(user_id, 0)
+    if now - last < seconds:
+        slow_tracker[chat_id][user_id] = now
+        return True
+    slow_tracker[chat_id][user_id] = now
+    return False
 
 
 # ================== MAIN HANDLER ==================
@@ -1384,7 +1518,6 @@ async def handle_message(bot, message):
                     f"💎 **امتیاز:** `{pts}`\n👥 **دعوت‌شده:** `{invited}`\n🎫 **کد:** `{code}`\n\n⚡ **FLUXBOT**"))
                 return
 
-            # 🆕 دکمه قابلیت‌ها
             if button_id == "btn_features" or raw_text == BTN_FEATURES or clean_text in ("قابلیت ها", "قابلیت‌ها", "قابلیت های ربات"):
                 await send_long_message(chat_id, get_features_text())
                 return
@@ -1450,11 +1583,44 @@ async def handle_message(bot, message):
 
         games = get_games()
 
+        # 🪙 بازی شیر یا خط - بررسی پاسخ
+        if chat_id in coin_flip_games:
+            cf = coin_flip_games[chat_id]
+            if str(sender_id) == cf["player"] and raw_text in ("شیر", "خط"):
+                choice = raw_text
+                del coin_flip_games[chat_id]
+                result = random.choice(["شیر", "خط"])
+                won = (choice == result)
+                if won:
+                    text = (
+                        f"🪙 **نتیجه:** {result}\n\n"
+                        f"🎉 **{disp} برنده شد!** 🎉\n\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+                    )
+                else:
+                    text = (
+                        f"🪙 **نتیجه:** {result}\n\n"
+                        f"😢 **{disp} باخت!**\n\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+                    )
+                await bot.send_message(chat_id=chat_id, text=text, reply_to_message_id=message.message_id)
+                return
+
         if clean_text in ("لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "بازی ها", "بازی‌ها"):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=get_games_list_text())
             return
 
-        # 🆕 تنظیم پیام خوش‌آمدگویی (فقط مالک)
+        # 🆕 قوانین
+        if clean_text == "قوانین":
+            rules = bot_data.get("rules", {}).get(chat_id)
+            if rules:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "📜 **قوانین گروه**\n"
+                    "━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"{rules}\n\n"
+                    "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"))
+            return
+
         cwm = re.match(r"^تنظیم\s+پیام\s+خوش\s*آمدگویی\s+(.+)$", clean_text)
         if cwm:
             if not is_owner_group: return
@@ -1467,24 +1633,17 @@ async def handle_message(bot, message):
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "✅ **پیام خوش‌آمدگویی تنظیم شد!**\n\n"
-                "📌 **متن تنظیم‌شده:**\n"
-                f"{welcome_text}\n\n"
-                "💡 متغیرها:\n"
-                "├ `{name}` → نام کاربر\n"
-                "├ `{group}` → نام گروه\n"
-                "└ `{time}` → زمان ورود\n\n"
+                "💡 متغیرها: `{name}` / `{group}` / `{time}`\n\n"
                 "⚡ **FLUXBOT**"))
             return
 
-        if is_command(clean_text, "حذف پیام خوش آمدگویی", "حذف پیام خوش‌آمدگویی", "پاک پیام خوش آمدگویی"):
+        if is_command(clean_text, "حذف پیام خوش آمدگویی", "حذف پیام خوش‌آمدگویی"):
             if not is_owner_group: return
             if "custom_welcome" not in bot_data: bot_data["custom_welcome"] = {}
             if chat_id in bot_data["custom_welcome"]:
                 del bot_data["custom_welcome"][chat_id]
                 save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, text="✅ **پیام خوش‌آمدگویی حذف شد.** الان پیام پیش‌فرض ارسال می‌شه.", reply_to_message_id=message.message_id)
-            else:
-                await bot.send_message(chat_id=chat_id, text="ℹ️ پیام سفارشی تنظیم نشده.", reply_to_message_id=message.message_id)
+                await bot.send_message(chat_id=chat_id, text="✅ **پیام خوش‌آمدگویی حذف شد.**", reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "نمایش پیام خوش آمدگویی", "نمایش پیام خوش‌آمدگویی"):
@@ -1492,12 +1651,126 @@ async def handle_message(bot, message):
             custom = bot_data.get("custom_welcome", {}).get(chat_id)
             if custom:
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                    "📋 **پیام خوش‌آمدگویی فعلی:**\n\n" + custom + "\n\n⚡ **FLUXBOT**"))
+                    "📋 **پیام خوش‌آمدگویی فعلی:**\n\n" + custom))
             else:
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="ℹ️ پیام پیش‌فرض فعاله.")
             return
 
-        # === بازی دوز ===
+        # 🆕 تنظیم قوانین
+        rtm = re.match(r"^تنظیم\s+قوانین\s+(.+)$", clean_text)
+        if rtm:
+            if not is_owner_group: return
+            rules_text = rtm.group(1).strip()
+            if not rules_text:
+                await bot.send_message(chat_id=chat_id, text="⚠️ متن قوانین رو وارد کنید.", reply_to_message_id=message.message_id)
+                return
+            if "rules" not in bot_data: bot_data["rules"] = {}
+            bot_data["rules"][chat_id] = rules_text
+            save_data(bot_data, force=True)
+            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                "✅ **قوانین گروه ثبت شد!**\n\n"
+                "📌 برای نمایش: `قوانین`\n\n"
+                "⚡ **FLUXBOT**"))
+            return
+
+        if is_command(clean_text, "حذف قوانین", "پاک قوانین"):
+            if not is_owner_group: return
+            if "rules" not in bot_data: bot_data["rules"] = {}
+            if chat_id in bot_data["rules"]:
+                del bot_data["rules"][chat_id]
+                save_data(bot_data, force=True)
+                await bot.send_message(chat_id=chat_id, text="✅ **قوانین گروه حذف شد.**", reply_to_message_id=message.message_id)
+            else:
+                await bot.send_message(chat_id=chat_id, text="ℹ️ قوانینی تنظیم نشده.", reply_to_message_id=message.message_id)
+            return
+
+        # 🆕 تنظیم ضد تکرار
+        arm = re.match(r"^تنظیم\s+ضد\s+تکرار\s+(\d+)$", clean_text)
+        if arm:
+            if not is_owner_group: return
+            limit = int(arm.group(1))
+            if limit < 2 or limit > 10:
+                await bot.send_message(chat_id=chat_id, text="⚠️ عدد باید بین ۲ تا ۱۰ باشد.", reply_to_message_id=message.message_id)
+                return
+            if "anti_repeat" not in bot_data: bot_data["anti_repeat"] = {}
+            bot_data["anti_repeat"][chat_id] = limit
+            save_data(bot_data, force=True)
+            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                f"✅ **ضد تکرار فعال شد!**\n\n"
+                f"📊 **حد:** {limit} پیام پشت سر هم\n"
+                f"⚠️ کاربر بعد از {limit} پیام، پاک می‌شه و اخطار می‌گیره.\n\n"
+                f"⚡ **FLUXBOT**"))
+            return
+
+        if is_command(clean_text, "ضد تکرار بسته", "غیرفعال ضد تکرار"):
+            if not is_owner_group: return
+            if "anti_repeat" not in bot_data: bot_data["anti_repeat"] = {}
+            if chat_id in bot_data["anti_repeat"]:
+                del bot_data["anti_repeat"][chat_id]
+                save_data(bot_data, force=True)
+            if chat_id in repeat_tracker:
+                del repeat_tracker[chat_id]
+            await bot.send_message(chat_id=chat_id, text="✅ **ضد تکرار غیرفعال شد.**", reply_to_message_id=message.message_id)
+            return
+
+        # 🆕 تنظیم حالت آهسته
+        smm = re.match(r"^تنظیم\s+حالت\s+آهسته\s+(.+)$", clean_text)
+        if smm:
+            if not is_owner_group: return
+            dur_text = smm.group(1).strip()
+            sec = parse_slow_duration(dur_text)
+            if sec is None:
+                await bot.send_message(chat_id=chat_id, text=(
+                    "⚠️ **فرمت اشتباه!**\n\n"
+                    "مثال‌ها:\n"
+                    "├ `تنظیم حالت آهسته 5 ثانیه`\n"
+                    "├ `تنظیم حالت آهسته 1 دقیقه`\n"
+                    "├ `تنظیم حالت آهسته 1 ساعت`\n"
+                    "└ `تنظیم حالت آهسته 1 روز`"), reply_to_message_id=message.message_id)
+                return
+            if "slow_mode" not in bot_data: bot_data["slow_mode"] = {}
+            bot_data["slow_mode"][chat_id] = sec
+            save_data(bot_data, force=True)
+            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                f"✅ **حالت آهسته فعال شد!**\n\n"
+                f"⏱️ **مدت:** {format_duration(sec)}\n"
+                f"📌 هر کاربر فقط یک پیام در هر {format_duration(sec)} می‌تونه بفرسته.\n\n"
+                f"⚡ **FLUXBOT**"))
+            return
+
+        if is_command(clean_text, "حالت آهسته بسته", "غیرفعال حالت آهسته"):
+            if not is_owner_group: return
+            if "slow_mode" not in bot_data: bot_data["slow_mode"] = {}
+            if chat_id in bot_data["slow_mode"]:
+                del bot_data["slow_mode"][chat_id]
+                save_data(bot_data, force=True)
+            if chat_id in slow_tracker:
+                del slow_tracker[chat_id]
+            await bot.send_message(chat_id=chat_id, text="✅ **حالت آهسته غیرفعال شد.**", reply_to_message_id=message.message_id)
+            return
+
+        # 🆕 پاکسازی انبوه
+        bcm = re.match(r"^پاکسازی\s+(\d+)$", clean_text)
+        if bcm:
+            if not can_manage: return
+            limit = int(bcm.group(1))
+            if limit < 1 or limit > 100:
+                await bot.send_message(chat_id=chat_id, text="⚠️ عدد باید بین ۱ تا ۱۰۰ باشد.", reply_to_message_id=message.message_id)
+                return
+            msg = await bot.send_message(chat_id=chat_id, text=f"🧹 در حال پاکسازی {limit} پیام...")
+            deleted, failed = await bulk_cleanup(chat_id, sender_id, limit)
+            try:
+                mid = extract_msg_id(msg)
+                if mid: await bot.delete_message(chat_id=chat_id, message_id=mid)
+            except: pass
+            await bot.send_message(chat_id=chat_id, text=(
+                f"🧹 **پاکسازی انجام شد!**\n\n"
+                f"✅ حذف شده: **{deleted}**\n"
+                f"❌ ناموفق: **{failed}**\n\n"
+                f"⚡ **FLUXBOT**"), reply_to_message_id=message.message_id)
+            return
+
+        # 🎮 بازی دوز
         game_start_match = re.match(r"^(دوز|بازی دوز)\s*(قرمز|زرد)?$", clean_text)
         if game_start_match:
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
@@ -1513,7 +1786,29 @@ async def handle_message(bot, message):
             color_emoji = RED if game["color1"] == "R" else YELLOW
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"🎮 **بازی دوز شروع شد!**\n\n👤 **سازنده:** {disp}\n🎨 **رنگ:** {color_emoji}\n\n"
-                f"⏳ **منتظر حریف...**\n\n📌 برای پیوستن: `شرکت`\n📌 برای لغو: `انصراف`\n\n⚡ **FLUXBOT**"))
+                f"⏳ **منتظر حریف...**\n\n📌 برای پیوستن: `شرکت`\n"
+                f"⏱️ اگه ۲ دقیقه کسی نیاد، خودکار لغو می‌شه.\n\n⚡ **FLUXBOT**"))
+            return
+
+        # 🪙 شروع بازی شیر یا خط
+        if clean_text in ("بازی شیر یا خط", "شیر یا خط", "شیریا خط"):
+            if chat_id in coin_flip_games:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "⚠️ **یک بازی شیر یا خط در جریانه!**"))
+                return
+            if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "⚠️ **یه بازی دیگه در جریانه!** اول اون تموم شه."))
+                return
+            coin_flip_games[chat_id] = {"player": str(sender_id), "started_at": time.time()}
+            try: asyncio.create_task(game_timeout_check(chat_id, "coinflip"))
+            except: pass
+            await bot.send_message(chat_id=chat_id, text=(
+                f"🪙 **بازی شیر یا خط شروع شد!**\n\n"
+                f"👤 **بازیکن:** {disp}\n\n"
+                f"🎯 **شیر یا خط؟** (بنویس `شیر` یا `خط`)\n\n"
+                f"⏱️ ۲ دقیقه فرصت داری.\n\n"
+                f"⚡ **FLUXBOT**"))
             return
 
         if is_command(clean_text, "شرکت", "join"):
@@ -1541,6 +1836,12 @@ async def handle_message(bot, message):
             return
 
         if is_command(clean_text, "انصراف"):
+            if chat_id in coin_flip_games:
+                cf = coin_flip_games[chat_id]
+                if str(sender_id) == cf["player"]:
+                    del coin_flip_games[chat_id]
+                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="🚫 **بازی شیر یا خط لغو شد.**")
+                    return
             g, status = await cancel_game(chat_id, sender_id)
             if status == "no_game": return
             if status == "not_player":
@@ -1784,6 +2085,10 @@ async def handle_message(bot, message):
                 sl = "\n".join([f"  • {sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}" for sh, sm, eh, em in sl_list])
                 s.append(f"🟡 زمان‌بندی:\n{sl}")
             else: s.append("🟢 زمان‌بندی: غیرفعال")
+            ar = bot_data.get("anti_repeat", {}).get(chat_id)
+            s.append(f"🔁 ضد تکرار: {'🔴 ' + str(ar) + ' پیام' if ar else '🟢 غیرفعال'}")
+            slow = bot_data.get("slow_mode", {}).get(chat_id)
+            s.append(f"🐌 حالت آهسته: {'🔴 ' + format_duration(slow) if slow else '🟢 غیرفعال'}")
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "🔒 **قفل گروه**\n━━━━━━━━━━━━━━━━━━━\n\n" + "\n\n".join(s) + "\n\n⚡ **FLUXBOT**"))
             return
@@ -1802,6 +2107,25 @@ async def handle_message(bot, message):
                 bot_data["mute_list"][chat_id] = chat_mutes
                 save_data(bot_data, force=True)
 
+        # 🆕 حالت آهسته (فقط برای غیر مدیر)
+        if not can_manage:
+            slow_sec = bot_data.get("slow_mode", {}).get(chat_id)
+            if slow_sec:
+                if await handle_slow_mode(chat_id, sender_id, slow_sec, ui):
+                    try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    except Exception as e:
+                        print(f"⚠️ slow delete: {e}", flush=True)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال سریع در حالت آهسته", user_info=ui)
+                    return
+
+        # 🆕 ضد تکرار (فقط برای غیر مدیر)
+        if not can_manage:
+            ar_limit = bot_data.get("anti_repeat", {}).get(chat_id)
+            if ar_limit:
+                if await handle_repeat_check(chat_id, sender_id, msg_id, ar_limit, ui):
+                    return
+
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
         if bot_data["group_message_count"][chat_id] >= PROMO_MSG_THRESHOLD:
@@ -1816,8 +2140,7 @@ async def handle_message(bot, message):
                 except Exception as e:
                     print(f"⚠️ promo 200msg: {e}", flush=True)
             else:
-                left = PROMO_CHAT_COOLDOWN - (time.time() - bot_data.get("last_chat_promo", {}).get(chat_id, 0))
-                print(f"⏸️ Promo skipped (cooldown {int(left)}s left)", flush=True)
+                print(f"⏸️ Promo skipped (cooldown)", flush=True)
         else: save_data(bot_data)
 
         if settings.get("welcome", True) and bot_is_active:
@@ -1897,7 +2220,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🚫 **{td} اخراج شد!**")
             except Exception as e:
                 print(f"⚠️ ban: {e}", flush=True)
-                await bot.send_message(chat_id=chat_id, text=f"❌ خطا: {e}", reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "انبن", "آنبن"):
@@ -2061,6 +2383,12 @@ async def handle_message(bot, message):
                 m, s = wda // 60, wda % 60
                 wds = f"🟡 {m}د {s}ث" if m > 0 else f"🟡 {wda}ث"
             else: wds = "🟢"
+            ar = bot_data.get("anti_repeat", {}).get(chat_id)
+            ars = f"🔴 {ar} پیام" if ar else "🟢 غیرفعال"
+            slow = bot_data.get("slow_mode", {}).get(chat_id)
+            slows = f"🔴 {format_duration(slow)}" if slow else "🟢 غیرفعال"
+            rl = bot_data.get("rules", {}).get(chat_id)
+            rs = "🔴 تنظیم شده" if rl else "🟢 تنظیم نشده"
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "📋 **قفل‌ها**\n━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🔗 لینک: {st(settings['link'])}\n🆔 آیدی: {st(settings['id'])}\n"
@@ -2068,7 +2396,10 @@ async def handle_message(bot, message):
                 f"👋 خوش‌آمد: {st(settings.get('welcome', True))}\n🤬 فحش: {st(settings.get('profanity', True))}\n"
                 f"📨 فوروارد: {st(settings.get('forward', False))}\n🎞️ گیف: {st(settings.get('gif', False))}\n"
                 f"🔒 قفل گروه: {gs}\n⚠️ اخطار: {ws} ({wl})\n⏱️ حذف اخطار: {wds}\n"
-                f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n\n⚡ **FLUXBOT**"))
+                f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n"
+                f"🔁 ضد تکرار: {ars}\n"
+                f"🐌 حالت آهسته: {slows}\n"
+                f"📜 قوانین: {rs}\n\n⚡ **FLUXBOT**"))
             return
 
         am = re.match(r"^تنظیم\s+اصل\s+(.+)$", clean_text)
@@ -2251,7 +2582,7 @@ async def auto_promo_task():
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
-    print(f"⏰ PROMO: every {PROMO_INTERVAL // 3600}h | cooldown {PROMO_CHAT_COOLDOWN // 60}min per chat", flush=True)
+    print(f"⏰ PROMO: every {PROMO_INTERVAL // 3600}h", flush=True)
     try: asyncio.create_task(auto_promo_task())
     except: pass
     try: asyncio.create_task(cleanup_task())
