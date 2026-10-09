@@ -4,6 +4,7 @@ import json
 import time
 import asyncio
 import random
+import traceback
 from datetime import datetime, timedelta, timezone
 from rubka import Robot, Message
 from rubka.keypad import ChatKeypadBuilder
@@ -15,6 +16,7 @@ if not TOKEN:
 bot = Robot(token=TOKEN)
 
 OWNER_ID = "u0KUJo1004f46bafc48e536f282693b6"
+BOT_ID_CACHE = {"id": None}
 
 IRAN_TZ = timezone(timedelta(hours=3, minutes=30))
 def get_local_now():
@@ -41,15 +43,18 @@ MAX_FILTER_WORDS = 50
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
 PROMO_INTERVAL = 4 * 60 * 60
 
-username_cache = {}
-mute_list = {}
+# ================== State (توی RAM فقط برای سرعت) ==================
+username_cache = {}    # (TTL اضافه شد)
+username_cache_ttl = {}
 spam_tracker = {}
-group_locks = {}
-temp_locks = {}
-scheduled_locks = {}
 processed_messages = {}
 text_dedup = {}
 waiting_for_code = {}
+group_info_cache = {}   # کش لیست گروه‌ها
+group_info_cache_ttl = {}
+
+# 🔧 FIX #1, #2: این سه تا حالا توی bot_data ذخیره می‌شن (persistent)
+# group_locks, temp_locks, scheduled_locks, mute_list → به bot_data منتقل شدند
 save_counter = {"data": 0, "cache": 0}
 
 EMPTY = "⚫"
@@ -174,9 +179,11 @@ async def schedule_delete(chat_id, message_id, delay_seconds):
         try:
             await asyncio.sleep(delay_seconds)
             await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ schedule_delete: {e}", flush=True)
     try: asyncio.create_task(_del())
-    except: pass
+    except Exception as e:
+        print(f"⚠️ create_task: {e}", flush=True)
 
 
 def extract_msg_id(result):
@@ -189,70 +196,134 @@ def extract_msg_id(result):
             if mid: return str(mid)
         elif hasattr(result, "message_id"):
             return str(result.message_id)
-    except: pass
+    except Exception as e:
+        print(f"⚠️ extract_msg_id: {e}", flush=True)
     return None
 
 
-# ================== 🔧 REPLY HANDLING (نسخه پیشرفته) ==================
+# ================== 🔧 FIX #10: User Info with TTL ==================
+async def get_user_info(chat_id, user_id, force=False):
+    key = f"{chat_id}:{user_id}"
+    now = time.time()
+    cached = username_cache.get(key)
+    ttl = username_cache_ttl.get(key, 0)
+    # 🔧 FIX #10: cache expire بعد از 1 ساعت
+    if not force and cached and now < ttl and (cached.get("username") or cached.get("name")):
+        return cached
+    
+    info = {"name": None, "username": None, "role": "عضو"}
+    try:
+        mi = await bot.get_chat_member(chat_id, user_id)
+        if mi:
+            data = mi.get("data", mi) if isinstance(mi, dict) else mi
+            cm = data.get("chat_member", data) if isinstance(data, dict) else {}
+            info["name"] = cm.get("first_name") or cm.get("name") or cm.get("title")
+            un = cm.get("username") or cm.get("user_name")
+            if un: info["username"] = str(un).lstrip("@")
+            st = str(cm.get("status", "")).strip().lower()
+            if st in ("creator", "owner"): info["role"] = "مالک"
+            elif st in ("admin", "administrator"): info["role"] = "ادمین"
+            username_cache[key] = info
+            username_cache_ttl[key] = now + 3600  # 1 ساعت
+            save_known_user(user_id, info.get("name"), info.get("username"))
+            save_data(bot_data)
+    except Exception as e:
+        print(f"⚠️ get_user_info: {e}", flush=True)
+    return info
+
+
+def save_known_user(user_id, name=None, username=None):
+    if "known_users" not in bot_data: bot_data["known_users"] = {}
+    uid = str(user_id)
+    if uid not in bot_data["known_users"]: bot_data["known_users"][uid] = {}
+    if name: bot_data["known_users"][uid]["name"] = name
+    if username: bot_data["known_users"][uid]["username"] = username
+    bot_data["known_users"][uid]["last_seen"] = time.time()
+
+
+def get_display_for_user(user_id):
+    uid = str(user_id)
+    now = time.time()
+    for k, v in username_cache.items():
+        ttl = username_cache_ttl.get(k, 0)
+        if now < ttl and k.endswith(f":{uid}"):
+            if v.get("username"): return f"@{v['username']}"
+            if v.get("name"): return v["name"]
+    ku = bot_data.get("known_users", {}).get(uid, {})
+    if ku.get("username"): return f"@{ku['username']}"
+    if ku.get("name"): return ku["name"]
+    short = uid[1:] if uid.startswith(("u", "b")) else uid
+    return f"کاربر `{short[:10]}`"
+
+
+def format_user_display(ui, uid):
+    if ui.get("username"): return f"@{ui['username']}"
+    if ui.get("name"): return ui["name"]
+    return get_display_for_user(uid)
+
+
+# ================== 🔧 FIX #3: Reply Handling با Bot Check ==================
+async def get_bot_id():
+    """دریافت آیدی ربات برای جلوگیری از بن کردن خودش"""
+    if BOT_ID_CACHE["id"]:
+        return BOT_ID_CACHE["id"]
+    try:
+        me = await bot.get_me()
+        if me:
+            if isinstance(me, dict):
+                data = me.get("data", me)
+                b = data.get("bot", data) if isinstance(data, dict) else {}
+                bid = b.get("bot_id") or b.get("id")
+                if bid:
+                    BOT_ID_CACHE["id"] = str(bid)
+                    return BOT_ID_CACHE["id"]
+            elif hasattr(me, 'bot_id'):
+                BOT_ID_CACHE["id"] = str(me.bot_id)
+                return BOT_ID_CACHE["id"]
+    except Exception as e:
+        print(f"⚠️ get_bot_id: {e}", flush=True)
+    return None
+
 
 def extract_reply_info(message):
-    """
-    استخراج جامع اطلاعات پیام ریپلای‌شده
-    برمی‌گرداند: {"reply_id": str or None, "sender_id": str or None}
-    """
+    """استخراج جامع اطلاعات پیام ریپلای‌شده"""
     result = {"reply_id": None, "sender_id": None}
-    
-    # ===== روش ۱: از reply_to_message object =====
     try:
-        rt = getattr(message, 'reply_to_message', None)
-        if rt is None:
-            rt = getattr(message, 'reply_message', None)
-        if rt is None:
-            rt = getattr(message, 'reply_to', None)
-        
+        rt = (getattr(message, 'reply_to_message', None) or 
+              getattr(message, 'reply_message', None) or 
+              getattr(message, 'reply_to', None))
         if rt:
-            # استخراج message_id
-            if hasattr(rt, 'message_id'):
-                result["reply_id"] = str(rt.message_id)
-            elif hasattr(rt, 'id'):
-                result["reply_id"] = str(rt.id)
+            if hasattr(rt, 'message_id'): result["reply_id"] = str(rt.message_id)
+            elif hasattr(rt, 'id'): result["reply_id"] = str(rt.id)
             elif isinstance(rt, dict):
                 mid = rt.get('message_id') or rt.get('id')
                 if mid: result["reply_id"] = str(mid)
             
-            # استخراج sender_id
-            if hasattr(rt, 'sender_id'):
-                result["sender_id"] = str(rt.sender_id)
-            elif hasattr(rt, 'user_id'):
-                result["sender_id"] = str(rt.user_id)
-            elif hasattr(rt, 'from_id'):
-                result["sender_id"] = str(rt.from_id)
+            if hasattr(rt, 'sender_id'): result["sender_id"] = str(rt.sender_id)
+            elif hasattr(rt, 'user_id'): result["sender_id"] = str(rt.user_id)
+            elif hasattr(rt, 'from_id'): result["sender_id"] = str(rt.from_id)
             elif hasattr(rt, 'sender'):
                 s = rt.sender
                 if hasattr(s, 'id'): result["sender_id"] = str(s.id)
-                elif isinstance(s, dict): 
+                elif isinstance(s, dict):
                     sid = s.get('id') or s.get('user_id')
                     if sid: result["sender_id"] = str(sid)
             elif isinstance(rt, dict):
                 sid = rt.get('sender_id') or rt.get('user_id') or rt.get('from_id')
                 if sid: result["sender_id"] = str(sid)
     except Exception as e:
-        print(f"⚠️ RT PARSE: {e}", flush=True)
+        print(f"⚠️ RT_PARSE: {e}", flush=True)
     
-    # ===== روش ۲: از reply_to_message_id =====
     if not result["reply_id"]:
         for attr in ['reply_to_message_id', 'reply_message_id', 'reply_id', 'replyToMessageId']:
             try:
                 val = getattr(message, attr, None)
                 if val:
-                    if hasattr(val, 'message_id'):
-                        result["reply_id"] = str(val.message_id)
-                    else:
-                        result["reply_id"] = str(val)
+                    if hasattr(val, 'message_id'): result["reply_id"] = str(val.message_id)
+                    else: result["reply_id"] = str(val)
                     break
             except: pass
     
-    # ===== روش ۳: از aux_data =====
     if not result["reply_id"]:
         try:
             aux = getattr(message, 'aux_data', None) or getattr(message, 'auxData', None)
@@ -261,27 +332,24 @@ def extract_reply_info(message):
                     v = aux.get(k)
                     if v:
                         result["reply_id"] = str(v)
-                        # چک برای sender_id
-                        if 'sender_id' in aux:
-                            result["sender_id"] = str(aux['sender_id'])
+                        if 'sender_id' in aux: result["sender_id"] = str(aux['sender_id'])
                         break
         except: pass
-    
     return result
 
 
 async def find_reply_target(message, chat_id):
-    """
-    پیدا کردن کاربر پیام ریپلای‌شده با ۵ روش مطمئن
-    """
+    """پیدا کردن کاربر ریپلای‌شده با 5 روش"""
     info = extract_reply_info(message)
     rid = info["reply_id"]
     sid_direct = info["sender_id"]
     
-    # روش ۱: از خود پیام (سریع‌ترین)
     if sid_direct:
-        print(f"🎯 TARGET (method 1 - direct): {sid_direct}", flush=True)
-        # ذخیره در کش برای آینده
+        bot_id = await get_bot_id()
+        # 🔧 FIX #3: جلوگیری از بن کردن ربات
+        if bot_id and sid_direct == bot_id:
+            print(f"⚠️ Target is BOT itself!", flush=True)
+            return "BOT_SELF"
         if rid and chat_id:
             c = load_cache()
             if chat_id not in c: c[chat_id] = {}
@@ -289,24 +357,20 @@ async def find_reply_target(message, chat_id):
             save_cache(c, force=True)
         return sid_direct
     
-    # اگر reply_id نداریم → خروج
-    if not rid:
-        print(f"❌ No reply_id", flush=True)
-        return None
+    if not rid: return None
     
-    print(f"🔍 reply_id={rid}, searching...", flush=True)
-    
-    # روش ۲: از کش (شایع‌ترین)
+    # کش
     try:
         c = load_cache()
         if chat_id in c and rid in c[chat_id]:
             sid = c[chat_id][rid]
-            print(f"🎯 TARGET (method 2 - cache): {sid}", flush=True)
+            bot_id = await get_bot_id()
+            if bot_id and sid == bot_id: return "BOT_SELF"
             return sid
     except Exception as e:
-        print(f"⚠️ Cache error: {e}", flush=True)
+        print(f"⚠️ cache lookup: {e}", flush=True)
     
-    # روش ۳: از API get_message
+    # API
     try:
         msg = await bot.get_message(chat_id=chat_id, message_id=rid)
         if msg:
@@ -317,49 +381,20 @@ async def find_reply_target(message, chat_id):
                 sid = m.get('sender_id') or m.get('user_id') or m.get('from_id')
             elif hasattr(msg, 'sender_id'):
                 sid = msg.sender_id
-            
             if sid:
                 sid = str(sid)
-                print(f"🎯 TARGET (method 3 - API): {sid}", flush=True)
-                # ذخیره در کش
+                bot_id = await get_bot_id()
+                if bot_id and sid == bot_id: return "BOT_SELF"
                 c = load_cache()
                 if chat_id not in c: c[chat_id] = {}
                 c[chat_id][rid] = sid
                 save_cache(c, force=True)
                 return sid
     except Exception as e:
-        print(f"⚠️ API error: {e}", flush=True)
+        print(f"⚠️ API get_message: {e}", flush=True)
     
-    # روش ۴: از get_updates
-    try:
-        updates = await bot.get_updates()
-        if updates:
-            update_list = []
-            if isinstance(updates, dict):
-                data = updates.get('data', {})
-                if isinstance(data, dict):
-                    update_list = data.get('updates', []) or data.get('messages', [])
-                elif isinstance(data, list):
-                    update_list = data
-            elif isinstance(updates, list):
-                update_list = updates
-            
-            for upd in update_list:
-                if not isinstance(upd, dict): continue
-                mid = str(upd.get('message_id', ''))
-                if mid == rid:
-                    sid = str(upd.get('sender_id', '') or upd.get('user_id', ''))
-                    if sid:
-                        print(f"🎯 TARGET (method 4 - updates): {sid}", flush=True)
-                        c = load_cache()
-                        if chat_id not in c: c[chat_id] = {}
-                        c[chat_id][rid] = sid
-                        save_cache(c, force=True)
-                        return sid
-    except Exception as e:
-        print(f"⚠️ Updates error: {e}", flush=True)
-    
-    print(f"❌ TARGET NOT FOUND: rid={rid}", flush=True)
+    # 🔧 FIX #12: get_updates فقط به عنوان آخرین راه‌حل
+    print(f"⚠️ Target not found via 3 methods: rid={rid}", flush=True)
     return None
 
 
@@ -430,29 +465,6 @@ def get_top_inviters(limit=10):
         counts[inviter_id] = counts.get(inviter_id, 0) + 1
     sorted_list = sorted(counts.items(), key=lambda x: x[1], reverse=True)
     return sorted_list[:limit]
-
-
-def save_known_user(user_id, name=None, username=None):
-    if "known_users" not in bot_data: bot_data["known_users"] = {}
-    uid = str(user_id)
-    if uid not in bot_data["known_users"]:
-        bot_data["known_users"][uid] = {}
-    if name: bot_data["known_users"][uid]["name"] = name
-    if username: bot_data["known_users"][uid]["username"] = username
-    bot_data["known_users"][uid]["last_seen"] = time.time()
-
-
-def get_display_for_user(user_id):
-    uid = str(user_id)
-    for k, v in username_cache.items():
-        if k.endswith(f":{uid}"):
-            if v.get("username"): return f"@{v['username']}"
-            if v.get("name"): return v["name"]
-    ku = bot_data.get("known_users", {}).get(uid, {})
-    if ku.get("username"): return f"@{ku['username']}"
-    if ku.get("name"): return ku["name"]
-    short = uid[1:] if uid.startswith(("u", "b")) else uid
-    return f"کاربر `{short[:10]}`"
 
 
 PROFANITY_LIST = [
@@ -568,36 +580,6 @@ def is_gif(message):
     except: return False
 
 
-async def get_user_info(chat_id, user_id):
-    key = f"{chat_id}:{user_id}"
-    cached = username_cache.get(key)
-    if cached and (cached.get("username") or cached.get("name")):
-        return cached
-    info = {"name": None, "username": None, "role": "عضو"}
-    try:
-        mi = await bot.get_chat_member(chat_id, user_id)
-        if mi:
-            data = mi.get("data", mi) if isinstance(mi, dict) else mi
-            cm = data.get("chat_member", data) if isinstance(data, dict) else {}
-            info["name"] = cm.get("first_name") or cm.get("name") or cm.get("title")
-            un = cm.get("username") or cm.get("user_name")
-            if un: info["username"] = str(un).lstrip("@")
-            st = str(cm.get("status", "")).strip().lower()
-            if st in ("creator", "owner"): info["role"] = "مالک"
-            elif st in ("admin", "administrator"): info["role"] = "ادمین"
-            username_cache[key] = info
-            save_known_user(user_id, info.get("name"), info.get("username"))
-            save_data(bot_data)
-    except: pass
-    return info
-
-
-def format_user_display(ui, uid):
-    if ui.get("username"): return f"@{ui['username']}"
-    if ui.get("name"): return ui["name"]
-    return get_display_for_user(uid)
-
-
 async def get_chat_name(chat_id):
     try:
         info = await bot.get_chat_info(chat_id)
@@ -608,7 +590,9 @@ async def get_chat_name(chat_id):
                 if isinstance(chat, dict):
                     return chat.get("title") or chat.get("name") or "گروه"
         return "گروه"
-    except: return "گروه"
+    except Exception as e:
+        print(f"⚠️ get_chat_name: {e}", flush=True)
+        return "گروه"
 
 
 async def get_chat_join_link(chat_id):
@@ -625,31 +609,50 @@ async def get_chat_join_link(chat_id):
                     un = chat.get("username")
                     if un: return f"https://rubika.ir/{un}"
         return None
-    except: return None
+    except Exception as e:
+        print(f"⚠️ get_chat_link: {e}", flush=True)
+        return None
 
 
+# ================== 🔧 FIX #7, #8: Group List با کش ==================
 async def get_group_list_text():
     groups = ensure_list(bot_data.get("known_groups", []))
     if not groups:
         return "📋 **لیست گروه‌ها**\n\n📭 ربات هنوز توی هیچ گروهی نیست.\n\n⚡ **FLUXBOT**"
+    
     text = (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
         "   ⚡ **FLUXBOT** ⚡\n"
         f"   📋 لیست گروه‌ها ({len(groups)})\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
     )
+    
+    now = time.time()
     for i, gid in enumerate(groups, 1):
-        try:
-            name = await get_chat_name(gid)
-            link = await get_chat_join_link(gid)
-            text += f"{i}. 🏠 **{name}**\n"
-            if link: text += f"   🔗 {link}\n"
-            else: text += f"   🔗 بدون لینک\n"
-            text += "\n"
-        except Exception as e:
-            print(f"⚠️ GROUP {gid}: {e}", flush=True)
-            text += f"{i}. 🏠 گروه #{i}\n   🔗 خطا\n\n"
-        await asyncio.sleep(0.3)
+        # 🔧 FIX #7: چک کش
+        cached = group_info_cache.get(gid)
+        ttl = group_info_cache_ttl.get(gid, 0)
+        if cached and now < ttl:
+            name = cached.get("name", "گروه")
+            link = cached.get("link")
+        else:
+            try:
+                name = await get_chat_name(gid)
+                link = await get_chat_join_link(gid)
+                group_info_cache[gid] = {"name": name, "link": link}
+                group_info_cache_ttl[gid] = now + 1800  # 30 دقیقه
+            except Exception as e:
+                print(f"⚠️ group info {gid}: {e}", flush=True)
+                name = f"گروه #{i}"
+                link = None
+            # 🔧 FIX #7: تاخیر کمتر
+            await asyncio.sleep(0.15)
+        
+        text += f"{i}. 🏠 **{name}**\n"
+        if link: text += f"   🔗 {link}\n"
+        else: text += f"   🔗 بدون لینک\n"
+        text += "\n"
+    
     text += "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
     return text
 
@@ -679,21 +682,30 @@ def load_cache():
                 with open(path, "r", encoding="utf-8") as f:
                     print(f"✅ CACHE: {path}", flush=True)
                     return json.load(f)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ load_cache {path}: {e}", flush=True)
     return {}
 
 
 def save_cache(cache, force=False):
-    """🔧 حالا cache رو سریع‌تر ذخیره می‌کنه"""
     save_counter["cache"] += 1
     if not force and save_counter["cache"] % 3 != 0: return
+    # 🔧 FIX #11: محدودیت کلی روی cache
+    total = sum(len(v) if isinstance(v, dict) else 0 for v in cache.values())
+    if total > 5000:
+        print(f"⚠️ Cache too big ({total}), trimming...", flush=True)
+        for k in list(cache.keys()):
+            if isinstance(cache[k], dict) and len(cache[k]) > 500:
+                items = list(cache[k].items())
+                cache[k] = dict(items[-500:])
     for path in CACHE_PATHS:
         try:
             dn = os.path.dirname(path)
             if dn and not os.path.exists(dn): os.makedirs(dn, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(cache, f, ensure_ascii=False)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ save_cache: {e}", flush=True)
 
 
 def load_data():
@@ -705,6 +717,8 @@ def load_data():
         "last_promo_time": {},
         "invite_codes": {}, "code_to_user": {}, "points": {}, "invited_users": {},
         "known_users": {}, "games": {},
+        # 🔧 FIX #1, #2: قفل‌ها و سکوت حالا persistent
+        "group_locks": {}, "temp_locks": {}, "scheduled_locks": {}, "mute_list": {},
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -727,7 +741,8 @@ def load_data():
                                 loaded["settings"][sk] = sv
                     print(f"✅ DATA: {path}", flush=True)
                     return loaded
-        except: pass
+        except Exception as e:
+            print(f"⚠️ load_data {path}: {e}", flush=True)
     return defaults
 
 
@@ -740,9 +755,11 @@ def save_data(data, force=False):
             if dn and not os.path.exists(dn): os.makedirs(dn, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ save_data: {e}", flush=True)
 
 
+# ================== Load State ==================
 bot_is_active = True
 bot_data = load_data()
 settings = bot_data.get("settings", {})
@@ -751,6 +768,41 @@ for sk in ["link", "id", "spam", "hyperlink", "warning", "filter", "auto_ban",
     if sk not in settings: settings[sk] = False
 if "welcome" not in settings: settings["welcome"] = True
 message_cache = load_cache()
+
+# 🔧 FIX #1, #2: از bot_data می‌خونیم
+group_locks = bot_data.get("group_locks", {})
+temp_locks = bot_data.get("temp_locks", {})
+scheduled_locks = bot_data.get("scheduled_locks", {})
+mute_list = bot_data.get("mute_list", {})
+
+# 🔧 FIX #6: پاکسازی waiting_for_code و username_cache قدیمی
+async def cleanup_task():
+    while True:
+        try:
+            await asyncio.sleep(300)  # هر 5 دقیقه
+            now = time.time()
+            # waiting_for_code
+            expired = [k for k, v in waiting_for_code.items() if now - v > 300]
+            for k in expired: del waiting_for_code[k]
+            # text_dedup
+            cutoff = now - 30
+            keys = [k for k, v in text_dedup.items() if v < cutoff]
+            for k in keys: 
+                if k in text_dedup: del text_dedup[k]
+            # username_cache
+            expired = [k for k, v in username_cache_ttl.items() if now > v]
+            for k in expired:
+                if k in username_cache: del username_cache[k]
+                if k in username_cache_ttl: del username_cache_ttl[k]
+            # processed_messages - 🔧 FIX #5: فقط قدیمی‌ها
+            if len(processed_messages) > 1000:
+                items = sorted(processed_messages.items(), key=lambda x: x[1])
+                keep = dict(items[-500:])
+                processed_messages.clear()
+                processed_messages.update(keep)
+            print(f"🧹 Cleanup done", flush=True)
+        except Exception as e:
+            print(f"⚠️ cleanup: {e}", flush=True)
 
 
 def contains_link(text):
@@ -808,16 +860,21 @@ def get_remaining_time(end_time):
 
 
 def is_group_locked(chat_id):
-    if group_locks.get(chat_id, False): return True, "قفل دستی"
-    if chat_id in temp_locks:
-        et = temp_locks[chat_id]
+    # 🔧 FIX #1: از bot_data می‌خونیم
+    if bot_data.get("group_locks", {}).get(chat_id, False): return True, "قفل دستی"
+    temp_locks_now = bot_data.get("temp_locks", {})
+    if chat_id in temp_locks_now:
+        et = temp_locks_now[chat_id]
         if time.time() < et:
             return True, f"قفل موقت (پایان: {datetime.fromtimestamp(et).strftime('%H:%M')})"
-        else: del temp_locks[chat_id]
-    if chat_id in scheduled_locks and scheduled_locks[chat_id]:
+        else:
+            del temp_locks_now[chat_id]
+            save_data(bot_data)
+    scheduled = bot_data.get("scheduled_locks", {})
+    if chat_id in scheduled and scheduled[chat_id]:
         now = get_local_now()
         cm = now.hour * 60 + now.minute
-        for sh, sm, eh, em in scheduled_locks[chat_id]:
+        for sh, sm, eh, em in scheduled[chat_id]:
             s, e = sh * 60 + sm, eh * 60 + em
             ts = f"{sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}"
             if s <= e:
@@ -855,7 +912,8 @@ async def add_warning(chat_id, user_id, reason="", user_info=None):
             if del_after > 0:
                 mid = extract_msg_id(result)
                 if mid: await schedule_delete(chat_id, mid, del_after)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ warn send: {e}", flush=True)
         if count >= limit and settings.get("auto_ban", True):
             try:
                 await bot.ban_member_chat(chat_id, user_id)
@@ -868,13 +926,17 @@ async def add_warning(chat_id, user_id, reason="", user_info=None):
                     if del_after > 0:
                         mid = extract_msg_id(result)
                         if mid: await schedule_delete(chat_id, mid, del_after)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ ban msg: {e}", flush=True)
                 bot_data["warnings"][chat_id][user_id] = 0
                 save_data(bot_data, force=True)
                 return True
-            except: pass
+            except Exception as e:
+                print(f"⚠️ ban: {e}", flush=True)
         return False
-    except: return False
+    except Exception as e:
+        print(f"❌ add_warning: {e}", flush=True)
+        return False
 
 
 def register_user(uid):
@@ -885,7 +947,8 @@ def register_user(uid):
         if uid not in bot_data["started_users"]:
             bot_data["started_users"].append(uid)
             save_data(bot_data)
-    except: pass
+    except Exception as e:
+        print(f"⚠️ register_user: {e}", flush=True)
 
 
 def register_group(gid):
@@ -896,7 +959,8 @@ def register_group(gid):
         if gid not in bot_data["known_groups"]:
             bot_data["known_groups"].append(gid)
             save_data(bot_data, force=True)
-    except: pass
+    except Exception as e:
+        print(f"⚠️ register_group: {e}", flush=True)
 
 
 def build_keypad():
@@ -998,6 +1062,8 @@ def get_help_text():
         "├ 🔗 `لینک` / 🆔 `آیدی`\n├ 📢 `اسپم` / 🔗 `هایپرلینک`\n"
         "├ 🤬 `فحش` / 📨 `فوروارد`\n├ 🎞️ `گیف` / 👋 `خداحافظی`\n"
         "└ 📋 `لیست قفل`\n\n"
+        "📋 **دستور مالک خاص:**\n"
+        "└ `لیست گروه ها` (توی پیوی)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
     )
 
@@ -1053,7 +1119,8 @@ async def process_invite_code(chat_id, user_id, code):
     try:
         oi = await get_user_info(chat_id, owner_id)
         owner_display = format_user_display(oi, owner_id)
-    except: pass
+    except Exception as e:
+        print(f"⚠️ owner display: {e}", flush=True)
     return (
         f"✅ **تبریک!**\n\n🎉 با کد دعوت وارد شدید!\n\n"
         f"👤 **صاحب کد:** {owner_display}\n⭐ +۱ امتیاز\n⭐ شما +۱ امتیاز\n\n"
@@ -1061,6 +1128,7 @@ async def process_invite_code(chat_id, user_id, code):
     )
 
 
+# ================== MAIN HANDLER ==================
 @bot.on_message()
 async def handle_message(bot, message):
     global bot_is_active, message_cache, bot_data, settings, text_dedup
@@ -1080,52 +1148,53 @@ async def handle_message(bot, message):
         if sender_id: register_user(sender_id)
         if is_group_chat(chat_id): register_group(chat_id)
 
-        # 🔧 ذخیره در کش + ذخیره‌ی خودکار کاربر reply
+        # ذخیره در کش
         if chat_id and msg_id and sender_id:
             if chat_id not in message_cache: message_cache[chat_id] = {}
             message_cache[chat_id][msg_id] = sender_id
-            # استخراج reply info و ذخیره
             try:
                 rinfo = extract_reply_info(message)
                 if rinfo["reply_id"] and rinfo["sender_id"]:
                     message_cache[chat_id][str(rinfo["reply_id"])] = str(rinfo["sender_id"])
-                    print(f"💾 Auto-cached: {rinfo['reply_id']}→{rinfo['sender_id']}", flush=True)
-                    save_cache(message_cache, force=True)
-                elif rinfo["reply_id"]:
-                    # فقط reply_id داریم، سعی می‌کنیم sender رو پیدا کنیم
-                    print(f"🔍 Reply detected but no sender: {rinfo['reply_id']}", flush=True)
-            except: pass
-            if len(message_cache[chat_id]) > 2000:
+            except Exception as e:
+                print(f"⚠️ reply cache: {e}", flush=True)
+            if len(message_cache[chat_id]) > 1000:
                 keys = list(message_cache[chat_id].keys())
-                for k in keys[:-2000]: del message_cache[chat_id][k]
+                for k in keys[:-1000]: del message_cache[chat_id][k]
             save_cache(message_cache)
 
         ct = time.time()
-        if len(processed_messages) > 800: processed_messages.clear()
+        
+        # 🔧 FIX #5: پاکسازی processed_messages - فقط قدیمی‌ها
+        if len(processed_messages) > 1000:
+            items = sorted(processed_messages.items(), key=lambda x: x[1])
+            keep = dict(items[-500:])
+            processed_messages.clear()
+            processed_messages.update(keep)
+        
         if msg_id in processed_messages: return
         processed_messages[msg_id] = ct
 
-        dedup_key = f"{chat_id}:{sender_id}:{raw_text}"
-        last_seen = text_dedup.get(dedup_key, 0)
-        if ct - last_seen < 1.5: return
-        text_dedup[dedup_key] = ct
-        if len(text_dedup) > 1500:
-            cutoff = ct - 20
-            text_dedup = {k: v for k, v in text_dedup.items() if v > cutoff}
+        # 🔧 FIX #4: برای مالک، dedup غیرفعال
+        is_owner_check = (str(sender_id) == OWNER_ID)
+        if not is_owner_check:
+            dedup_key = f"{chat_id}:{sender_id}:{raw_text}"
+            last_seen = text_dedup.get(dedup_key, 0)
+            if ct - last_seen < 1.5: return
+            text_dedup[dedup_key] = ct
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
 
         # ============ پیوی ============
         if is_private_chat(chat_id):
-            is_owner = (str(sender_id) == OWNER_ID)
-            
-            if is_owner and clean_text in ("لیست گروه ها", "لیست گروه‌ها", "گروه ها", "گروه‌ها", "لیست گروها"):
+            if is_owner_check and clean_text in ("لیست گروه ها", "لیست گروه‌ها", "گروه ها", "گروه‌ها", "لیست گروها"):
                 msg = await bot.send_message(chat_id=chat_id, text="⏳ در حال جمع‌آوری...")
                 groups_text = await get_group_list_text()
                 try:
                     mid = extract_msg_id(msg)
                     if mid: await bot.delete_message(chat_id=chat_id, message_id=mid)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ delete loading msg: {e}", flush=True)
                 await send_long_message(chat_id, groups_text)
                 return
             
@@ -1199,7 +1268,8 @@ async def handle_message(bot, message):
                 if kp:
                     try:
                         await bot.send_message(chat_id=chat_id, text=text, chat_keypad=kp, chat_keypad_type="New")
-                    except:
+                    except Exception as e:
+                        print(f"⚠️ keypad send: {e}", flush=True)
                         await bot.send_message(chat_id=chat_id, text=text)
                 else:
                     await bot.send_message(chat_id=chat_id, text=text)
@@ -1216,10 +1286,12 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner_group or is_special
 
+        # چک قفل
         locked, reason = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete locked: {e}", flush=True)
             return
 
         games = get_games()
@@ -1337,10 +1409,13 @@ async def handle_message(bot, message):
                 f"🕐 `{now.strftime('%H:%M:%S')}`\n📅 `{now.strftime('%Y/%m/%d')}`\n📆 {wd}\n\n⚡ **FLUXBOT**"))
             return
 
-        # 🔧 حذف ویژه (اول)
+        # حذف ویژه
         if is_command(clean_text, "حذف ویژه", "لغو ویژه", "حذف ادمین"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را از ویژه حذف کنید.", reply_to_message_id=message.message_id)
+                return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -1354,10 +1429,13 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=f"ℹ️ **{td}** ویژه نیست.", reply_to_message_id=message.message_id)
             return
 
-        # 🔧 ویژه (اضافه)
+        # ویژه
         if is_command(clean_text, "ویژه", "ادمین"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="ℹ️ ربات خودش ویژه است.", reply_to_message_id=message.message_id)
+                return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -1377,6 +1455,9 @@ async def handle_message(bot, message):
         if wam:
             if not can_manage: return
             target_uid = await find_reply_target(message, chat_id)
+            if target_uid == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="⚠️ ربات اخطار ندارد.", reply_to_message_id=message.message_id)
+                return
             if not target_uid:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -1428,21 +1509,32 @@ async def handle_message(bot, message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=rid)
                 await bot.send_message(chat_id=chat_id, text="🗑️ **حذف شد.**", reply_to_message_id=message.message_id)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete: {e}", flush=True)
             return
 
         if is_command(clean_text, "باز", "بازکردن"):
             if not can_manage: return
             had = False
-            if group_locks.get(chat_id, False): group_locks[chat_id] = False; had = True
-            if chat_id in temp_locks: del temp_locks[chat_id]; had = True
+            # 🔧 FIX #1: persistent
+            if bot_data.get("group_locks", {}).get(chat_id, False):
+                bot_data["group_locks"][chat_id] = False
+                had = True
+            if chat_id in bot_data.get("temp_locks", {}):
+                del bot_data["temp_locks"][chat_id]
+                had = True
+            if had:
+                save_data(bot_data, force=True)
             msg = "🔓 **گروه باز شد!**" if had else "ℹ️ از قبل باز بود."
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "قفل گروه", "قفلگروه"):
             if not can_manage: return
-            group_locks[chat_id] = True
+            # 🔧 FIX #1: persistent
+            if "group_locks" not in bot_data: bot_data["group_locks"] = {}
+            bot_data["group_locks"][chat_id] = True
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="🔒 **گروه قفل شد!**\n\nباز: `باز`")
             return
 
@@ -1453,8 +1545,12 @@ async def handle_message(bot, message):
             if h <= 0 or h > 168:
                 await bot.send_message(chat_id=chat_id, text="⚠️ 1 تا 168 ساعت", reply_to_message_id=message.message_id); return
             et = time.time() + h * 3600
-            temp_locks[chat_id] = et
-            group_locks[chat_id] = False
+            # 🔧 FIX #1: persistent
+            if "temp_locks" not in bot_data: bot_data["temp_locks"] = {}
+            if "group_locks" not in bot_data: bot_data["group_locks"] = {}
+            bot_data["temp_locks"][chat_id] = et
+            bot_data["group_locks"][chat_id] = False
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"🔒 **قفل موقت: {h} ساعت**\n🕐 پایان: {datetime.fromtimestamp(et).strftime('%H:%M - %Y/%m/%d')}"))
             return
@@ -1465,25 +1561,33 @@ async def handle_message(bot, message):
             sh, sm2, eh, em = map(int, sm.groups())
             if not (0 <= sh <= 23 and 0 <= sm2 <= 59 and 0 <= eh <= 23 and 0 <= em <= 59):
                 await bot.send_message(chat_id=chat_id, text="⚠️ ساعت نامعتبر", reply_to_message_id=message.message_id); return
-            if chat_id not in scheduled_locks: scheduled_locks[chat_id] = []
-            scheduled_locks[chat_id].append((sh, sm2, eh, em))
+            # 🔧 FIX #1: persistent
+            if "scheduled_locks" not in bot_data: bot_data["scheduled_locks"] = {}
+            if chat_id not in bot_data["scheduled_locks"]: bot_data["scheduled_locks"][chat_id] = []
+            bot_data["scheduled_locks"][chat_id].append((sh, sm2, eh, em))
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🔒 **قفل: {sh:02d}:{sm2:02d} تا {eh:02d}:{em:02d}**")
             return
 
         if is_command(clean_text, "حذف قفل زمان‌بندی"):
             if not can_manage: return
-            if chat_id in scheduled_locks: scheduled_locks[chat_id] = []
+            if "scheduled_locks" not in bot_data: bot_data["scheduled_locks"] = {}
+            bot_data["scheduled_locks"][chat_id] = []
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, text="✅ حذف شد.", reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "لیست قفل گروه"):
             if not can_manage: return
             s = []
-            s.append("🔴 قفل دستی: فعال" if group_locks.get(chat_id) else "🟢 قفل دستی: غیرفعال")
-            if chat_id in temp_locks: s.append(f"🟡 موقت: {get_remaining_time(temp_locks[chat_id])}")
+            gl = bot_data.get("group_locks", {}).get(chat_id, False)
+            tl = bot_data.get("temp_locks", {}).get(chat_id)
+            sl_list = bot_data.get("scheduled_locks", {}).get(chat_id, [])
+            s.append("🔴 قفل دستی: فعال" if gl else "🟢 قفل دستی: غیرفعال")
+            if tl: s.append(f"🟡 موقت: {get_remaining_time(tl)}")
             else: s.append("🟢 موقت: غیرفعال")
-            if chat_id in scheduled_locks and scheduled_locks[chat_id]:
-                sl = "\n".join([f"  • {sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}" for sh, sm, eh, em in scheduled_locks[chat_id]])
+            if sl_list:
+                sl = "\n".join([f"  • {sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}" for sh, sm, eh, em in sl_list])
                 s.append(f"🟡 زمان‌بندی:\n{sl}")
             else: s.append("🟢 زمان‌بندی: غیرفعال")
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
@@ -1491,13 +1595,19 @@ async def handle_message(bot, message):
             return
 
         now = time.time()
-        cm_list = mute_list.get(chat_id, {})
-        if sender_id in cm_list:
-            if now < cm_list[sender_id]:
+        # 🔧 FIX #2: persistent mute
+        chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
+        if sender_id in chat_mutes:
+            if now < chat_mutes[sender_id]:
                 try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ delete muted: {e}", flush=True)
                 return
-            else: del cm_list[sender_id]
+            else:
+                del chat_mutes[sender_id]
+                if "mute_list" not in bot_data: bot_data["mute_list"] = {}
+                bot_data["mute_list"][chat_id] = chat_mutes
+                save_data(bot_data, force=True)
 
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
@@ -1505,7 +1615,8 @@ async def handle_message(bot, message):
             bot_data["group_message_count"][chat_id] = 0
             save_data(bot_data, force=True)
             try: await bot.send_message(chat_id=chat_id, text=get_promo_text())
-            except: pass
+            except Exception as e:
+                print(f"⚠️ promo send: {e}", flush=True)
         else: save_data(bot_data)
 
         if settings.get("welcome", True) and bot_is_active:
@@ -1522,7 +1633,8 @@ async def handle_message(bot, message):
                         f"💎 **امکانات:**\n"
                         f"├ 📊 `پروفایل`\n├ 🎮 `دوز`\n"
                         f"├ 🐺 `تنظیم اصل [نام]`\n└ 📚 `راهنما`\n\n⚡ **FLUXBOT**"))
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ welcome: {e}", flush=True)
                 if chat_id not in bot_data["welcomed_users"]: bot_data["welcomed_users"][chat_id] = {}
                 bot_data["welcomed_users"][chat_id][sender_id] = True
                 save_data(bot_data)
@@ -1572,8 +1684,16 @@ async def handle_message(bot, message):
         if is_command(clean_text, "بن", "سیک", "اخراج"):
             if not can_manage: return
             tgt = await find_reply_target(message, chat_id)
+            # 🔧 FIX #3: جلوگیری از بن کردن ربات
+            if tgt == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را اخراج کنید!", reply_to_message_id=message.message_id)
+                return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
+                return
+            # جلوگیری از بن کردن مالک
+            if tgt == OWNER_ID:
+                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید مالک ربات را اخراج کنید!", reply_to_message_id=message.message_id)
                 return
             try:
                 ti = await get_user_info(chat_id, tgt)
@@ -1583,12 +1703,17 @@ async def handle_message(bot, message):
                 bot_data["banned_users"][chat_id][tgt] = time.time()
                 save_data(bot_data, force=True)
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🚫 **{td} اخراج شد!**")
-            except: pass
+            except Exception as e:
+                print(f"⚠️ ban: {e}", flush=True)
+                await bot.send_message(chat_id=chat_id, text=f"❌ خطا: {e}", reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "انبن", "آنبن"):
             if not can_manage: return
             tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="⚠️ ربات بن نبوده.", reply_to_message_id=message.message_id)
+                return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -1600,7 +1725,8 @@ async def handle_message(bot, message):
                     del bot_data["banned_users"][chat_id][tgt]
                     save_data(bot_data, force=True)
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"✅ **{td} آنبن شد!**")
-            except: pass
+            except Exception as e:
+                print(f"⚠️ unban: {e}", flush=True)
             return
 
         fm = re.match(r"^فیلتر\s+(.+)$", clean_text)
@@ -1675,10 +1801,19 @@ async def handle_message(bot, message):
             mins = int(mm.group(1))
             if mins <= 0: return
             tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را سکوت کنید.", reply_to_message_id=message.message_id)
+                return
             if not tgt: tgt = sender_id
+            if tgt == OWNER_ID:
+                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید مالک ربات را سکوت کنید.", reply_to_message_id=message.message_id)
+                return
             et = time.time() + mins * 60
-            if chat_id not in mute_list: mute_list[chat_id] = {}
-            mute_list[chat_id][tgt] = et
+            # 🔧 FIX #2: persistent mute
+            if "mute_list" not in bot_data: bot_data["mute_list"] = {}
+            if chat_id not in bot_data["mute_list"]: bot_data["mute_list"][chat_id] = {}
+            bot_data["mute_list"][chat_id][tgt] = et
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🔇 سکوت {mins} دقیقه (پایان: {datetime.fromtimestamp(et).strftime('%H:%M')})")
             return
 
@@ -1697,6 +1832,9 @@ async def handle_message(bot, message):
         if is_command(clean_text, "اخطار"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF":
+                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید به ربات اخطار دهید.", reply_to_message_id=message.message_id)
+                return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -1812,7 +1950,8 @@ async def handle_message(bot, message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings["warning"]: await add_warning(chat_id, sender_id, "فحش", user_info=ui)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ delete profanity: {e}", flush=True)
                 return
 
         if settings["filter"]:
@@ -1822,7 +1961,8 @@ async def handle_message(bot, message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings["warning"]: await add_warning(chat_id, sender_id, "کلمه فیلترشده", user_info=ui)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ delete filter: {e}", flush=True)
                 return
 
         if settings["spam"]:
@@ -1834,46 +1974,55 @@ async def handle_message(bot, message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings["warning"]: await add_warning(chat_id, sender_id, "اسپم", user_info=ui)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ delete spam: {e}", flush=True)
                 return
 
         if settings["link"] and contains_link(raw_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings["warning"]: await add_warning(chat_id, sender_id, "لینک", user_info=ui)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete link: {e}", flush=True)
             return
 
         if settings["hyperlink"] and contains_hyperlink(raw_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings["warning"]: await add_warning(chat_id, sender_id, "هایپرلینک", user_info=ui)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete hyperlink: {e}", flush=True)
             return
 
         if settings["id"] and contains_id(raw_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings["warning"]: await add_warning(chat_id, sender_id, "آیدی", user_info=ui)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete id: {e}", flush=True)
             return
 
         if settings.get("forward", False) and is_forwarded(message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings["warning"]: await add_warning(chat_id, sender_id, "فوروارد", user_info=ui)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete forward: {e}", flush=True)
             return
 
         if settings.get("gif", False) and is_gif(message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings["warning"]: await add_warning(chat_id, sender_id, "گیف", user_info=ui)
-            except: pass
+            except Exception as e:
+                print(f"⚠️ delete gif: {e}", flush=True)
             return
 
     except Exception as e:
-        print(f"❌ ERROR: {type(e).__name__}: {e}", flush=True)
+        print(f"❌ HANDLER ERROR: {type(e).__name__}: {e}", flush=True)
+        try:
+            traceback.print_exc()
+        except: pass
 
 
 async def auto_promo_task():
@@ -1891,7 +2040,8 @@ async def auto_promo_task():
                     await bot.send_message(chat_id=gid, text=get_promo_text())
                     sent += 1
                     await asyncio.sleep(2)
-                except: pass
+                except Exception as e:
+                    print(f"⚠️ promo {gid}: {e}", flush=True)
             bot_data["last_promo_time"] = {"time": time.time(), "sent": sent}
             save_data(bot_data, force=True)
             print(f"💤 PROMO | sent={sent}", flush=True)
@@ -1905,6 +2055,8 @@ async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
     try: asyncio.create_task(auto_promo_task())
+    except: pass
+    try: asyncio.create_task(cleanup_task())
     except: pass
     try: await bot.run()
     except Exception as e: print(f"❌ BOT RUN: {type(e).__name__}: {e}", flush=True)
