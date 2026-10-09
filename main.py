@@ -30,10 +30,13 @@ BTN_HELP = "📚 آموزش فعال‌سازی"
 BTN_USERS = "👥 کاربران"
 BTN_GROUPS = "🏠 گروه‌های فعال"
 BTN_DEV = "👑 سازنده ربات"
+BTN_INVITE_ENTER = "🎟️ زدن کد دعوت"
+BTN_INVITE_SHOW = "🎫 کد دعوت من"
+BTN_POINTS = "⭐ امتیاز من"
 MAX_FILTER_WORDS = 50
 
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
-PROMO_INTERVAL = 4 * 60 * 60  # هر 4 ساعت
+PROMO_INTERVAL = 4 * 60 * 60
 
 username_cache = {}
 mute_list = {}
@@ -43,6 +46,7 @@ temp_locks = {}
 scheduled_locks = {}
 processed_messages = {}
 text_dedup = {}
+waiting_for_code = {}  # {user_id: timestamp} - کاربر منتظر وارد کردن کد
 save_counter = {"data": 0, "cache": 0}
 
 
@@ -90,27 +94,29 @@ def extract_msg_id(result):
     return None
 
 
-def split_long_text(text, max_len=1500):
-    """تقسیم متن طولانی به تکه‌های کوچک‌تر"""
+def split_text(text, max_len=800):
+    """تقسیم متن طولانی به تکه‌های کوچک"""
     if not text: return [""]
     if len(text) <= max_len: return [text]
     parts = []
-    while len(text) > max_len:
-        cut = text.rfind('\n', 0, max_len)
-        if cut == -1 or cut < 100:
+    remaining = text
+    while len(remaining) > max_len:
+        cut = remaining.rfind('\n', 0, max_len)
+        if cut < 50:
             cut = max_len
-        parts.append(text[:cut])
-        text = text[cut:].lstrip()
-    if text:
-        parts.append(text)
+        parts.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        parts.append(remaining)
     return parts
 
 
 async def send_long_message(chat_id, text, reply_to_message_id=None):
-    """ارسال متن طولانی به صورت تکه‌تکه"""
-    parts = split_long_text(text, 1500)
+    """ارسال متن طولانی به صورت تکه‌تکه (بدون reply در تکه‌های بعدی)"""
+    parts = split_text(text, 800)
     first_result = None
     for i, part in enumerate(parts):
+        if not part: continue
         try:
             kwargs = {"chat_id": chat_id, "text": part}
             if reply_to_message_id and i == 0:
@@ -119,10 +125,51 @@ async def send_long_message(chat_id, text, reply_to_message_id=None):
             if i == 0:
                 first_result = result
             if i < len(parts) - 1:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.5)
         except Exception as e:
-            print(f"❌ PART {i} FAIL: {e}", flush=True)
+            print(f"❌ SEND PART {i}: {e}", flush=True)
     return first_result
+
+
+def generate_invite_code():
+    """تولید کد ۶ رقمی یکتا"""
+    existing = set(bot_data.get("invite_codes", {}).values())
+    for _ in range(100):
+        code = str(random.randint(100000, 999999))
+        if code not in existing:
+            return code
+    # Fallback: اگه 100 بار تلاش کرد و یکتا نشد
+    return str(random.randint(1000000, 9999999))[-6:]
+
+
+def get_or_create_code(user_id):
+    """گرفتن یا ساختن کد دعوت اختصاصی برای کاربر"""
+    user_id = str(user_id)
+    if "invite_codes" not in bot_data: bot_data["invite_codes"] = {}
+    if "code_to_user" not in bot_data: bot_data["code_to_user"] = {}
+    if user_id in bot_data["invite_codes"]:
+        code = bot_data["invite_codes"][user_id]
+        # اطمینان از اینکه در reverse lookup هم هست
+        bot_data["code_to_user"][code] = user_id
+        return code
+    code = generate_invite_code()
+    bot_data["invite_codes"][user_id] = code
+    bot_data["code_to_user"][code] = user_id
+    save_data(bot_data, force=True)
+    return code
+
+
+def get_points(user_id):
+    user_id = str(user_id)
+    return bot_data.get("points", {}).get(user_id, 0)
+
+
+def add_point(user_id, amount=1):
+    user_id = str(user_id)
+    if "points" not in bot_data: bot_data["points"] = {}
+    bot_data["points"][user_id] = bot_data["points"].get(user_id, 0) + amount
+    save_data(bot_data, force=True)
+    return bot_data["points"][user_id]
 
 
 PROFANITY_LIST = [
@@ -340,6 +387,7 @@ def load_data():
         "warn_limit": {}, "warn_delete_after": {}, "started_users": [], "known_groups": [],
         "group_message_count": {}, "promo_sent": {}, "filtered_words": {}, "banned_users": {},
         "last_promo_time": {},
+        "invite_codes": {}, "code_to_user": {}, "points": {}, "invited_users": {},
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -550,9 +598,14 @@ def build_keypad():
         b3 = b.button_simple(id="btn_users", text=BTN_USERS)
         b4 = b.button_simple(id="btn_groups", text=BTN_GROUPS)
         b5 = b.button_simple(id="btn_dev", text=BTN_DEV)
+        b6 = b.button_simple(id="btn_invite_enter", text=BTN_INVITE_ENTER)
+        b7 = b.button_simple(id="btn_invite_show", text=BTN_INVITE_SHOW)
+        b8 = b.button_simple(id="btn_points", text=BTN_POINTS)
         b.row(b1, b2)
         b.row(b3, b4)
         b.row(b5)
+        b.row(b6, b7)
+        b.row(b8)
         return b.build()
     except Exception as e:
         print(f"❌ KEYPAD: {e}", flush=True)
@@ -592,34 +645,33 @@ def get_promo_text():
 
 
 def get_education_text():
-    """متن آموزش فعال‌سازی"""
     return (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
         "   ⚡ **FLUXBOT** ⚡\n"
         "   📚 آموزش فعال‌سازی 📚\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
-        "🌟 **مراحل فعال‌سازی ربات FluxBot:**\n\n"
+        "🌟 **مراحل فعال‌سازی:**\n\n"
         "1️⃣ **افزودن ربات به گروه:**\n"
-        "└ روی گزینه «افزودن به گروه» بزنید\n\n"
+        "└ روی «افزودن به گروه» بزنید\n\n"
         "2️⃣ **دسترسی کامل بدهید:**\n"
-        "├ ربات را در گروه **ادمین** کنید\n"
-        "├ دسترسی «حذف پیام» را فعال کنید\n"
-        "└ دسترسی «مشاهده پیام‌ها» را فعال کنید\n\n"
-        "3️⃣ **تنظیمات حریم خصوصی:**\n"
+        "├ ربات را **ادمین** کنید\n"
+        "├ دسترسی «حذف پیام» فعال\n"
+        "└ دسترسی «مشاهده پیام‌ها» فعال\n\n"
+        "3️⃣ **حریم خصوصی:**\n"
         "└ در تنظیمات گروه، گزینه\n"
         "   «دریافت همه پیام‌های گروه»\n"
         "   را فعال کنید\n\n"
         "4️⃣ **منتظر بمانید:**\n"
-        "└ بین ۱ تا ۲ دقیقه صبر کنید\n\n"
+        "└ ۱ تا ۲ دقیقه صبر کنید\n\n"
         "5️⃣ **فعال‌سازی:**\n"
         "└ در گروه بنویسید: `فعال`\n"
-        "└ ربات با پیام «✅ ربات فعال شد»\n"
-        "   پاسخ می‌دهد\n\n"
+        "└ ربات پاسخ می‌دهد:\n"
+        "   «✅ ربات فعال شد»\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "💡 **نکات مهم:**\n"
-        "├ برای دیدن راهنما: `راهنما`\n"
-        "├ برای قفل‌ها: `لیست قفل`\n"
-        "└ برای پروفایل: `پروفایل`\n\n"
+        "├ `راهنما` → همه دستورات\n"
+        "├ `لیست قفل` → وضعیت قفل‌ها\n"
+        "└ `پروفایل` → پروفایل شما\n\n"
         "📢 **کانال رسمی:**\n"
         "➣ **@RPCITY_PHANTOM**\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -661,53 +713,46 @@ def get_help_text():
         "├ ⏰ `ساعت` → ساعت و تاریخ\n"
         "├ 🐺 `تنظیم اصل [نام]`\n"
         "├ 🎭 `تنظیم لقب [نام]`\n"
-        "├ 😂 `جک` یا `جوک`\n"
+        "├ 🎟️ `زدن کد دعوت` → دکمه\n"
+        "├ 🎫 `کد دعوت من` → دکمه\n"
+        "├ ⭐ `امتیاز من` → دکمه\n"
+        "├ 😂 `جک` / `جوک`\n"
         "├ 📜 `ضرب المثل`\n"
-        "├ 💡 `دانستی`\n"
-        "├ 🧠 `فکت`\n"
-        "├ 💚 `پ ن پ`\n"
-        "├ 📝 `شعر`\n"
-        "├ 🔮 `فال`\n"
-        "├ 🍀 `شانس`\n"
+        "├ 💡 `دانستی` / 🧠 `فکت`\n"
+        "├ 💚 `پ ن پ` / 📝 `شعر`\n"
+        "├ 🔮 `فال` / 🍀 `شانس`\n"
         "└ 📚 `راهنما`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "👑 **دستورات مالک / ویژه:**\n"
         "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
-        "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
-        "├ ✅ `انبن` / `آنبن` (ریپلای)\n"
+        "├ 🚫 `بن` / `سیک` / `اخراج`\n"
+        "├ ✅ `انبن` / `آنبن`\n"
         "├ 🔇 `سکوت [دقیقه]`\n"
         "├ ⚠️ `اخطار` (ریپلای)\n"
         "├ ⚙️ `تنظیم اخطار [عدد]`\n"
         "├ ⏱️ `حذف پیام اخطار [ثانیه]`\n"
         "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
         "├ 🚫 `فیلتر [کلمه]`\n"
-        "├ ❌ `حذف فیلتر [کلمه]`\n"
         "└ 📋 `لیست فیلتر`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🗑️ **مدیریت پیام:**\n"
-        "├ 🗑️ `حذف` (ریپلای) → حذف فوری\n"
-        "└ ⏱️ `حذف [دقیقه]` (ریپلای)\n"
-        "    مثال: `حذف 5` = 5 دقیقه\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🗑️ `حذف` (ریپلای)\n"
+        "└ ⏱️ `حذف [دقیقه]` (ریپلای)\n\n"
         "🔒 **قفل گروه:**\n"
-        "├ 🔒 `قفل گروه` → قفل دستی\n"
-        "├ ⏱️ `قفل [ساعت]` → قفل موقت\n"
-        "├ ⏰ `قفل 13:00 14:00` → قفل روزانه\n"
-        "├ 🔓 `باز` → باز کردن\n"
+        "├ 🔒 `قفل گروه`\n"
+        "├ ⏱️ `قفل [ساعت]`\n"
+        "├ ⏰ `قفل 13:00 14:00`\n"
+        "├ 🔓 `باز`\n"
         "├ 📋 `لیست قفل گروه`\n"
         "└ ❌ `حذف قفل زمان‌بندی`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚙️ **قفل‌ها (باز/بسته):**\n"
-        "├ 🔗 `لینک` → حذف لینک‌ها\n"
-        "├ 🆔 `آیدی` → حذف @username\n"
-        "├ 📢 `اسپم` → ضد اسپم\n"
-        "├ 🔗 `هایپرلینک` → حذف لینک مخفی\n"
-        "├ 🤬 `فحش` → حذف فحش\n"
-        "├ 📨 `فوروارد` یا `هدایت`\n"
-        "├ 🎞️ `گیف` → حذف گیف\n"
-        "├ 👋 `خداحافظی`\n"
+        "├ 🔗 `لینک` / 🆔 `آیدی`\n"
+        "├ 📢 `اسپم` / 🔗 `هایپرلینک`\n"
+        "├ 🤬 `فحش` / 📨 `فوروارد`\n"
+        "├ 🎞️ `گیف` / 👋 `خداحافظی`\n"
         "├ 👋 `خوش‌آمدگویی`\n"
-        "└ 📋 `لیست قفل` → وضعیت همه\n\n"
+        "└ 📋 `لیست قفل`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **FLUXBOT** | جریان قدرت"
     )
@@ -721,6 +766,71 @@ def get_users_text():
 def get_groups_text():
     c = len(ensure_list(bot_data.get("known_groups", [])))
     return f"🏠 **گروه‌های فعال:** **{c}**\n\n⚡ **FLUXBOT**"
+
+
+async def process_invite_code(chat_id, user_id, code, user_display):
+    """پردازش کد دعوت وارد شده"""
+    code = str(code).strip()
+    
+    # اطمینان از وجود ساختار
+    if "invited_users" not in bot_data: bot_data["invited_users"] = {}
+    if "code_to_user" not in bot_data: bot_data["code_to_user"] = {}
+    
+    user_id = str(user_id)
+    
+    # ۱. چک اگه قبلاً دعوت شده
+    if user_id in bot_data["invited_users"]:
+        return (
+            f"❌ **شما قبلاً با کد دعوت وارد شده‌اید!**\n\n"
+            f"📌 هر کاربر فقط یک بار می‌تواند از کد دعوت استفاده کند.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ **FLUXBOT**"
+        )
+    
+    # ۲. چک اگه کد خودشه
+    own_code = bot_data.get("invite_codes", {}).get(user_id)
+    if own_code and own_code == code:
+        return (
+            f"❌ **نمی‌توانید کد خودتان را وارد کنید!**\n\n"
+            f"📌 کد خودتان را برای دوستانتان بفرستید.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ **FLUXBOT**"
+        )
+    
+    # ۳. پیدا کردن صاحب کد
+    owner_id = bot_data["code_to_user"].get(code)
+    if not owner_id:
+        return (
+            f"❌ **کد دعوت اشتباه است!**\n\n"
+            f"📌 کد وارد شده: `{code}`\n"
+            f"🔍 کدی با این مقدار پیدا نشد.\n\n"
+            f"💡 دقت کنید که کد ۶ رقمی باشد.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ **FLUXBOT**"
+        )
+    
+    # ۴. ثبت دعوت + امتیاز
+    bot_data["invited_users"][user_id] = owner_id
+    if "points" not in bot_data: bot_data["points"] = {}
+    bot_data["points"][owner_id] = bot_data["points"].get(owner_id, 0) + 1
+    save_data(bot_data, force=True)
+    
+    # اطلاعات صاحب کد
+    owner_display = "کاربر"
+    try:
+        oi = await get_user_info(chat_id, owner_id)
+        owner_display = format_user_display(oi, owner_id)
+    except: pass
+    
+    return (
+        f"✅ **تبریک!**\n\n"
+        f"🎉 شما با کد دعوت وارد شدید!\n\n"
+        f"👤 **صاحب کد:** {owner_display}\n"
+        f"⭐ **امتیاز ایشان:** +۱ امتیاز\n\n"
+        f"💎 **امتیاز شما:** {get_points(user_id)} ⭐\n\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ **FLUXBOT** | جریان قدرت"
+    )
 
 
 @bot.on_message()
@@ -771,30 +881,102 @@ async def handle_message(bot, message):
 
         # ============ پیوی ============
         if is_private_chat(chat_id):
-            # تشخیص دکمه‌ها
+            # چک انتظار برای کد دعوت
+            wait_ts = waiting_for_code.get(sender_id, 0)
+            if wait_ts and ct - wait_ts < 120:
+                # کاربر منتظر وارد کردن کد
+                code_match = re.match(r'^\s*(\d{6})\s*$', raw_text)
+                if code_match:
+                    code = code_match.group(1)
+                    del waiting_for_code[sender_id]
+                    ui = {"name": None, "username": None}
+                    result_text = await process_invite_code(chat_id, sender_id, code, None)
+                    await bot.send_message(chat_id=chat_id, text=result_text)
+                    return
+                # اگه متن عدد نبود، پیام خطا
+                if raw_text not in ("انصراف", "لغو", "/cancel"):
+                    # فقط یه بار هشدار بده
+                    del waiting_for_code[sender_id]
+                    await bot.send_message(chat_id=chat_id, text=(
+                        "❌ **کد نامعتبر!**\n\n"
+                        "کد دعوت باید **۶ رقم عددی** باشد.\n\n"
+                        "💡 دوباره روی دکمه «🎟️ زدن کد دعوت» بزنید.\n\n"
+                        "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+                    ))
+                    return
+
+            # دکمه کانال
             if button_id == "btn_channel" or raw_text == BTN_CHANNEL or text_contains(raw_text, "کانال"):
-                print(f"📢 PV: channel button", flush=True)
-                await bot.send_message(chat_id=chat_id, text=get_channel_text())
-                return
-            if button_id == "btn_help" or raw_text == BTN_HELP or text_contains(raw_text, "آموزش") or text_contains(raw_text, "فعال سازی") or text_contains(raw_text, "فعالسازی"):
-                print(f"📚 PV: education button", flush=True)
-                await send_long_message(chat_id, get_education_text())
-                return
+                await bot.send_message(chat_id=chat_id, text=get_channel_text()); return
+
+            # دکمه آموزش
+            if button_id == "btn_help" or raw_text == BTN_HELP or text_contains(raw_text, "آموزش"):
+                await send_long_message(chat_id, get_education_text()); return
+
+            # دکمه کاربران
             if button_id == "btn_users" or raw_text == BTN_USERS or text_contains(raw_text, "کاربران"):
-                print(f"👥 PV: users button", flush=True)
-                await bot.send_message(chat_id=chat_id, text=get_users_text())
-                return
+                await bot.send_message(chat_id=chat_id, text=get_users_text()); return
+
+            # دکمه گروه‌ها
             if button_id == "btn_groups" or raw_text == BTN_GROUPS or text_contains(raw_text, "گروه"):
-                print(f"🏠 PV: groups button", flush=True)
-                await bot.send_message(chat_id=chat_id, text=get_groups_text())
-                return
+                await bot.send_message(chat_id=chat_id, text=get_groups_text()); return
+
+            # دکمه سازنده
             if button_id == "btn_dev" or raw_text == BTN_DEV or text_contains(raw_text, "سازنده"):
-                print(f"👑 PV: dev button", flush=True)
-                await bot.send_message(chat_id=chat_id, text=get_dev_text())
+                await bot.send_message(chat_id=chat_id, text=get_dev_text()); return
+
+            # دکمه زدن کد دعوت
+            if button_id == "btn_invite_enter" or raw_text == BTN_INVITE_ENTER or text_contains(raw_text, "زدن کد"):
+                waiting_for_code[sender_id] = ct
+                await bot.send_message(chat_id=chat_id, text=(
+                    "🎟️ **زدن کد دعوت**\n\n"
+                    "کد دعوت ۶ رقمی خود را ارسال کنید.\n\n"
+                    "📌 کد باید ۶ رقم عددی باشد.\n\n"
+                    "💡 برای لغو، کلمه «انصراف» را بفرستید.\n\n"
+                    "━━━━━━━━━━━━━━━━━━━\n"
+                    "⏱️ این پیام تا ۲ دقیقه فعال است.\n"
+                    "⚡ **FLUXBOT**"
+                ))
                 return
 
+            # دکمه کد دعوت من
+            if button_id == "btn_invite_show" or raw_text == BTN_INVITE_SHOW or text_contains(raw_text, "کد دعوت من"):
+                code = get_or_create_code(sender_id)
+                await bot.send_message(chat_id=chat_id, text=(
+                    f"🎫 **کد دعوت شما**\n\n"
+                    f"کد اختصاصی شما:\n"
+                    f"`{code}`\n\n"
+                    f"📌 این کد را به دوستانتان بدهید.\n"
+                    f"💎 هر کاربری که این کد را وارد کند،\n"
+                    f"   شما **۱ امتیاز** می‌گیرید.\n\n"
+                    f"⭐ **امتیاز فعلی شما:** {get_points(sender_id)}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ **FLUXBOT** | جریان قدرت"
+                ))
+                return
+
+            # دکمه امتیاز من
+            if button_id == "btn_points" or raw_text == BTN_POINTS or text_contains(raw_text, "امتیاز"):
+                pts = get_points(sender_id)
+                code = get_or_create_code(sender_id)
+                invited = sum(1 for v in bot_data.get("invited_users", {}).values() if v == sender_id)
+                await bot.send_message(chat_id=chat_id, text=(
+                    f"⭐ **امتیاز من**\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"💎 **امتیاز شما:** `{pts}`\n"
+                    f"👥 **تعداد دعوت‌شده:** `{invited}`\n"
+                    f"🎫 **کد دعوت شما:** `{code}`\n\n"
+                    f"📌 برای دعوت دوستان:\n"
+                    f"└ کد خود را به آن‌ها بدهید\n"
+                    f"└ آن‌ها کد را در «زدن کد دعوت» وارد کنند\n"
+                    f"└ شما **۱ امتیاز** می‌گیرید\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ **FLUXBOT** | جریان قدرت"
+                ))
+                return
+
+            # دستور start
             if is_command(clean_text, "start", "شروع", "منو"):
-                print(f"🤖 PV: start menu", flush=True)
                 text = (
                     "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
                     "🌟 **به ربات مدیریتی FluxBot خوش آمدید!**\n\n"
@@ -805,7 +987,6 @@ async def handle_message(bot, message):
                 if kp:
                     try:
                         await bot.send_message(chat_id=chat_id, text=text, chat_keypad=kp, chat_keypad_type="New")
-                        print(f"✅ PV: keypad sent", flush=True)
                     except Exception as e:
                         print(f"❌ KEYPAD SEND: {e}", flush=True)
                         await bot.send_message(chat_id=chat_id, text=text)
@@ -824,16 +1005,15 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner or is_special
 
-        # قفل گروه
         locked, reason = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             except: pass
             return
 
-        # ============ راهنما (اول از همه) ============
+        # راهنما (اول از همه)
         if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands"):
-            print(f"📚 GROUP: help cmd", flush=True)
+            print(f"📚 HELP CMD from {sender_id}", flush=True)
             await send_long_message(chat_id, get_help_text(), reply_to_message_id=message.message_id)
             print(f"✅ HELP SENT", flush=True)
             return
@@ -1300,12 +1480,14 @@ async def handle_message(bot, message):
             ss = "⭐ ویژه" if is_special else "عادی"
             wc = bot_data["warnings"].get(chat_id, {}).get(sender_id, 0)
             wl = bot_data["warn_limit"].get(chat_id, 3)
+            pts = get_points(sender_id)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"📊 **پروفایل {disp}**\n━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🐺 اصل: `{asl}`\n"
                 f"🎭 لقب: `{lgh}`\n"
                 f"👑 مقام: {role}\n"
                 f"⭐ وضعیت: {ss}\n"
+                f"💎 امتیاز: `{pts}`\n"
                 f"⚠️ اخطار: [{wc}/{wl}]\n"
                 f"📅 پیوست: {jd}\n"
                 f"💬 پیام امروز: {tc}\n\n⚡ **FLUXBOT**"))
