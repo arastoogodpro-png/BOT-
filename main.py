@@ -41,8 +41,8 @@ spam_tracker = {}
 group_locks = {}
 temp_locks = {}
 scheduled_locks = {}
-processed_messages = {}  # {msg_id: time}
-text_dedup = {}  # {chat:user:text -> time} برای جلوگیری از پاسخ تکراری
+processed_messages = {}
+text_dedup = {}
 save_counter = {"data": 0, "cache": 0}
 
 
@@ -184,7 +184,6 @@ def normalize_text(text):
 
 
 def text_contains(text, keyword):
-    """چک کردن وجود کلمه در متن با نادیده گرفتن ZWNJ و فاصله"""
     if not text: return False
     n = normalize_text(text)
     nk = normalize_text(keyword)
@@ -646,7 +645,7 @@ def get_groups_text():
 
 @bot.on_message()
 async def handle_message(bot, message):
-    global bot_is_active, message_cache, bot_data, settings
+    global bot_is_active, message_cache, bot_data, settings, text_dedup
 
     try:
         msg_id = str(message.message_id)
@@ -671,33 +670,26 @@ async def handle_message(bot, message):
                 for k in keys[:-300]: del message_cache[chat_id][k]
             save_cache(message_cache)
 
-        # === فیلتر پیام تکراری (دو لایه) ===
         ct = time.time()
 
-        # لایه اول: msg_id
         if len(processed_messages) > 500: processed_messages.clear()
         if msg_id in processed_messages:
             return
         processed_messages[msg_id] = ct
 
-        # لایه دوم: ترکیب (chat + sender + text) برای 3 ثانیه
         dedup_key = f"{chat_id}:{sender_id}:{raw_text}"
         last_seen = text_dedup.get(dedup_key, 0)
         if ct - last_seen < 3:
-            print(f"⏭️ DUP TEXT IGNORED", flush=True)
             return
         text_dedup[dedup_key] = ct
 
-        # پاکسازی
         if len(text_dedup) > 1000:
             cutoff = ct - 30
             text_dedup = {k: v for k, v in text_dedup.items() if v > cutoff}
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
 
-        # ========== پیوی ==========
         if is_private_chat(chat_id):
-            # بررسی کلیک روی دکمه‌ها با تطبیق انعطاف‌پذیر
             if button_id == "btn_channel" or raw_text == BTN_CHANNEL or text_contains(raw_text, "کانال"):
                 await bot.send_message(chat_id=chat_id, text=get_channel_text()); return
             if button_id == "btn_help" or raw_text == BTN_HELP or text_contains(raw_text, "آموزش"):
@@ -726,7 +718,6 @@ async def handle_message(bot, message):
 
         if not is_group_chat(chat_id): return
 
-        # اطلاعات کاربر
         ui = await get_user_info(chat_id, sender_id)
         role = ui["role"]
         disp = format_user_display(ui, sender_id)
@@ -734,21 +725,16 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner or is_special
 
-        # قفل گروه
         locked, reason = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             except: pass
             return
 
-        # ============ راهنما (قبل از هر چیز چک می‌کنیم) ============
-        if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands") or clean_text in ("راهنما", "help"):
-            print(f"📚 HELP CMD from {sender_id}", flush=True)
-            try:
-                await bot.send_message(chat_id=chat_id, text=get_help_text(), reply_to_message_id=message.message_id)
-                print(f"✅ HELP SENT", flush=True)
-            except Exception as e:
-                print(f"❌ HELP FAIL: {e}", flush=True)
+        # راهنما (اول از همه)
+        if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands"):
+            print(f"📚 HELP CMD", flush=True)
+            await bot.send_message(chat_id=chat_id, text=get_help_text(), reply_to_message_id=message.message_id)
             return
 
         # ⏰ ساعت
@@ -763,7 +749,6 @@ async def handle_message(bot, message):
                 f"📆 {wd}\n\n⚡ **FLUXBOT**"))
             return
 
-        # حذف زمان‌بندی
         dtm = re.match(r"^حذف\s+(\d+)$", clean_text)
         if dtm:
             if not can_manage: return
@@ -781,7 +766,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=f"⏱️ پیام پس از **{ts}** پاک می‌شه.", reply_to_message_id=message.message_id)
             return
 
-        # حذف فوری
         if is_command(clean_text, "حذف", "پاک"):
             if not can_manage: return
             rid = extract_reply_id(message)
@@ -793,7 +777,6 @@ async def handle_message(bot, message):
             except: pass
             return
 
-        # باز کردن
         if is_command(clean_text, "باز", "بازکردن"):
             if not can_manage: return
             had = False
@@ -803,7 +786,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
 
-        # قفل گروه دستی
         if is_command(clean_text, "قفل گروه", "قفلگروه"):
             if not can_manage: return
             group_locks[chat_id] = True
@@ -811,7 +793,6 @@ async def handle_message(bot, message):
                 "🔒 **گروه قفل شد!**\n\nفقط مالک و ویژه‌ها پیام بدن.\n\nباز کردن: `باز`"))
             return
 
-        # قفل موقت
         tm = re.match(r"^قفل\s+(\d+)$", clean_text)
         if tm:
             if not can_manage: return
@@ -825,7 +806,6 @@ async def handle_message(bot, message):
                 f"🔒 **قفل موقت: {h} ساعت**\n🕐 پایان: {datetime.fromtimestamp(et).strftime('%H:%M - %Y/%m/%d')}\n\nباز: `باز`"))
             return
 
-        # قفل زمان‌بندی
         sm = re.match(r"^قفل\s+(\d{1,2}):(\d{2})\s+(?:تا\s+)?(\d{1,2}):(\d{2})$", clean_text)
         if sm:
             if not can_manage: return
@@ -858,7 +838,6 @@ async def handle_message(bot, message):
                 "🔒 **وضعیت قفل گروه**\n━━━━━━━━━━━━━━━━━━━\n\n" + "\n\n".join(s) + "\n\n⚡ **FLUXBOT**"))
             return
 
-        # سکوت
         now = time.time()
         cm_list = mute_list.get(chat_id, {})
         if sender_id in cm_list:
@@ -868,7 +847,6 @@ async def handle_message(bot, message):
                 return
             else: del cm_list[sender_id]
 
-        # شمارنده 200 پیام
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
         if bot_data["group_message_count"][chat_id] >= 200:
@@ -878,7 +856,6 @@ async def handle_message(bot, message):
             except: pass
         else: save_data(bot_data)
 
-        # خوش‌آمدگویی
         if settings.get("welcome", True) and bot_is_active:
             welcomed = bot_data.get("welcomed_users", {}).get(chat_id, {})
             if sender_id not in welcomed:
@@ -903,7 +880,6 @@ async def handle_message(bot, message):
                 bot_data["welcomed_users"][chat_id][sender_id] = True
                 save_data(bot_data)
 
-        # آمار
         today = get_local_now().strftime("%Y-%m-%d")
         if chat_id not in bot_data["message_counts"]: bot_data["message_counts"][chat_id] = {}
         if sender_id not in bot_data["message_counts"][chat_id]:
@@ -912,8 +888,6 @@ async def handle_message(bot, message):
             bot_data["message_counts"][chat_id][sender_id] = {"today": 0, "date": today}
         bot_data["message_counts"][chat_id][sender_id]["today"] += 1
         save_data(bot_data)
-
-        # ============ دستورات مدیریتی ============
 
         if is_command(clean_text, "فعال", "فاعل"):
             if not can_manage: return
@@ -929,7 +903,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
 
-        # حذف پیام اخطار
         wdm = re.match(r"^حذف\s+پیام\s+اخطار\s+(\d+)$", clean_text)
         if wdm:
             if not is_owner: return
@@ -949,7 +922,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=f"✅ **فعال شد ({ts}).**", reply_to_message_id=message.message_id)
             return
 
-        # بن
         if is_command(clean_text, "بن", "سیک", "اخراج"):
             if not can_manage: return
             rid = extract_reply_id(message)
@@ -971,7 +943,6 @@ async def handle_message(bot, message):
                 print(f"❌ BAN: {e}", flush=True)
             return
 
-        # انبن
         if is_command(clean_text, "انبن", "آنبن"):
             if not can_manage: return
             rid = extract_reply_id(message)
@@ -993,7 +964,6 @@ async def handle_message(bot, message):
                 print(f"❌ UNBAN: {e}", flush=True)
             return
 
-        # فیلتر
         fm = re.match(r"^فیلتر\s+(.+)$", clean_text)
         if fm:
             if not is_owner: return
@@ -1027,7 +997,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=t, reply_to_message_id=message.message_id)
             return
 
-        # سرگرمی‌ها
         if is_command(clean_text, "جک", "جوک"):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"😂 **جوک:**\n\n{random.choice(JOKES)}\n\n⚡ **FLUXBOT**"); return
         if is_command(clean_text, "ضرب المثل", "ضرب‌المثل"):
@@ -1049,7 +1018,6 @@ async def handle_message(bot, message):
                 "🎮 **سرگرمی‌ها:**\n\n😂 `جک`\n📜 `ضرب المثل`\n💡 `دانستی`\n🧠 `فکت`\n💚 `پ ن پ`\n📝 `شعر`\n🔮 `فال`\n🍀 `شانس`\n⏰ `ساعت`\n\n⚡ **FLUXBOT**"))
             return
 
-        # آمار گروه
         if is_command(clean_text, "آمار گروه", "تاپ", "برترین‌ها"):
             today = get_local_now().strftime("%Y-%m-%d")
             counts = bot_data["message_counts"].get(chat_id, {})
@@ -1066,7 +1034,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🏆 **برترین‌ها:**\n\n" + "\n".join(lines) + "\n\n⚡ **FLUXBOT**")
             return
 
-        # سکوت
         mm = re.match(r"^سکوت\s+(\d+)$", clean_text)
         if mm:
             if not can_manage: return
@@ -1084,7 +1051,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🔇 سکوت {mins} دقیقه (پایان: {datetime.fromtimestamp(et).strftime('%H:%M')})")
             return
 
-        # تنظیم اخطار
         wsm = re.match(r"^تنظیم\s+اخطار\s+(\d+)$", clean_text)
         if wsm:
             if not is_owner: return
@@ -1097,7 +1063,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=f"✅ حد اخطار: {lim}", reply_to_message_id=message.message_id)
             return
 
-        # اخطار
         if is_command(clean_text, "اخطار"):
             if not is_owner: return
             tgt = None
@@ -1111,7 +1076,6 @@ async def handle_message(bot, message):
             await add_warning(chat_id, tgt, "اخطار دستی مالک", user_info=ti)
             return
 
-        # ویژه
         if is_command(clean_text, "ویژه", "ادمین"):
             if not is_owner: return
             tgt = None
@@ -1142,7 +1106,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text="⚠️ نبود.", reply_to_message_id=message.message_id)
             return
 
-        # قفل‌ها
         feat = re.match(r"^(لینک|آیدی|اسپم|هایپرلینک|خوش‌آمدگویی|فحش|فوروارد|هدایت|گیف|خداحافظی)\s+(باز|بسته)$", clean_text)
         if feat:
             if not can_manage: return
@@ -1158,7 +1121,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=f"✅ {f} {s} شد.", reply_to_message_id=message.message_id)
             return
 
-        # لیست قفل
         if is_command(clean_text, "لیست قفل"):
             if not can_manage: return
             st = lambda v: "🔴" if v else "🟢"
@@ -1188,7 +1150,6 @@ async def handle_message(bot, message):
                 f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n\n⚡ **FLUXBOT**"))
             return
 
-        # تنظیم اصل
         am = re.match(r"^تنظیم\s+اصل\s+(.+)$", clean_text)
         if am:
             av = am.group(1).strip()
@@ -1206,7 +1167,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=f"✅ اصل: `{av}`", reply_to_message_id=message.message_id)
             return
 
-        # تنظیم لقب
         lm = re.match(r"^تنظیم\s+لقب\s+(.+)$", clean_text)
         if lm:
             lv = lm.group(1).strip()
@@ -1224,7 +1184,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=f"✅ لقب: `{lv}`", reply_to_message_id=message.message_id)
             return
 
-        # پروفایل
         if is_command(clean_text, "پروفایل", "آمار", "امار", "آمارم", "امارم"):
             ut = bot_data["user_titles"].get(chat_id, {}).get(sender_id, {})
             asl = ut.get("asl", "ثبت نشده")
@@ -1255,7 +1214,6 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=f"👤 {role}", reply_to_message_id=message.message_id)
             return
 
-        # ========== بررسی خودکار ==========
         if not bot_is_active: return
         if can_manage: return
 
