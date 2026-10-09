@@ -37,15 +37,14 @@ BTN_DEV = "👑 سازنده ربات"
 BTN_INVITE_ENTER = "🎟️ زدن کد دعوت"
 BTN_INVITE_SHOW = "🎫 کد دعوت من"
 BTN_POINTS = "⭐ امتیاز من"
+BTN_FEATURES = "📖 قابلیت‌های ربات"
 BTN_TOP_INVITERS = "🏆 لیست برتر دعوت‌کنندگان"
 MAX_FILTER_WORDS = 50
 
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
-
-# 🆕 تنظیمات تبلیغ
-PROMO_INTERVAL = 5 * 60 * 60        # هر ۵ ساعت
-PROMO_CHAT_COOLDOWN = 60 * 60        # حداقل ۱ ساعت بین تبلیغ‌ها در هر گروه
-PROMO_MSG_THRESHOLD = 200            # هر ۲۰۰ پیام
+PROMO_INTERVAL = 5 * 60 * 60
+PROMO_CHAT_COOLDOWN = 60 * 60
+PROMO_MSG_THRESHOLD = 200
 
 username_cache = {}
 username_cache_ttl = {}
@@ -335,8 +334,7 @@ async def find_reply_target(message, chat_id):
     sid_direct = info["sender_id"]
     if sid_direct:
         bot_id = await get_bot_id()
-        if bot_id and sid_direct == bot_id:
-            return "BOT_SELF"
+        if bot_id and sid_direct == bot_id: return "BOT_SELF"
         if rid and chat_id:
             c = load_cache()
             if chat_id not in c: c[chat_id] = {}
@@ -447,13 +445,11 @@ def get_top_inviters(limit=10):
 
 
 def can_send_promo_to_chat(chat_id):
-    """🆕 چک میکنه آیا میتونه به این گروه تبلیغ بفرسته"""
     last = bot_data.get("last_chat_promo", {}).get(chat_id, 0)
     return (time.time() - last) >= PROMO_CHAT_COOLDOWN
 
 
 def mark_promo_sent(chat_id):
-    """🆕 ثبت زمان آخرین تبلیغ"""
     if "last_chat_promo" not in bot_data: bot_data["last_chat_promo"] = {}
     bot_data["last_chat_promo"][chat_id] = time.time()
 
@@ -659,6 +655,158 @@ def get_games_list_text():
     )
 
 
+def get_features_text():
+    return (
+        "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+        "   ⚡ **FLUXBOT** ⚡\n"
+        "   🌊 جریان قدرت 🌊\n"
+        "   📖 قابلیت‌های کامل\n"
+        "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🛡️ **امنیت و مدیریت گروه**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🔗 قفل لینک (حذف خودکار لینک)\n"
+        "├ 🆔 قفل آیدی (حذف @username)\n"
+        "├ 📢 قفل اسپم (ضد اسپم هوشمند)\n"
+        "├ 🔗 قفل هایپرلینک (لینک مخفی)\n"
+        "├ 🤬 قفل فحش (۱۰۰+ کلمه)\n"
+        "├ 📨 قفل فوروارد\n"
+        "├ 🎞️ قفل گیف\n"
+        "├ 👋 قفل خداحافظی\n"
+        "├ 👋 قفل خوش‌آمدگویی\n"
+        "├ 🔒 قفل گروه دستی\n"
+        "├ ⏱️ قفل موقت (به ساعت)\n"
+        "└ ⏰ قفل زمان‌بندی (روزانه)\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "👑 **مدیریت کاربران**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ ⚠️ سیستم اخطار هوشمند\n"
+        "├ 🚫 اخراج خودکار بعد از اخطار\n"
+        "├ ❌ حذف اخطار (کل یا عددی)\n"
+        "├ 🔇 سکوت با زمان دلخواه\n"
+        "├ ⭐ ویژه کردن کاربران\n"
+        "├ ❌ حذف از لیست ویژه\n"
+        "├ 👤 نمایش مقام واقعی\n"
+        "├ 🚫 دستور بن/سیک/اخراج\n"
+        "└ ✅ دستور آنبن\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎮 **بازی و سرگرمی**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🎲 بازی دوز چهارتایی (دو نفره)\n"
+        "├ 😂 جک و جوک\n"
+        "├ 📜 ضرب‌المثل\n"
+        "├ 💡 دانستی\n"
+        "├ 🧠 فکت علمی\n"
+        "├ 💚 پند و اندرز (پ ن پ)\n"
+        "├ 📝 شعر\n"
+        "├ 🔮 فال حافظ\n"
+        "├ 🍀 شانس امروز\n"
+        "└ 🎮 لیست بازی‌ها\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "📊 **پروفایل و آمار**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🐺 تنظیم اصل اختصاصی\n"
+        "├ 🎭 تنظیم لقب اختصاصی\n"
+        "├ 📈 آمار پیام روزانه\n"
+        "├ 📅 تاریخ پیوست به گروه\n"
+        "├ 🏆 برترین‌های روز (تاپ ۱۰)\n"
+        "├ 💎 نمایش امتیاز\n"
+        "├ ⏰ ساعت و تاریخ زنده\n"
+        "└ 👤 پروفایل کامل کاربران\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎟️ **سیستم دعوت دوستان**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🎫 کد دعوت ۶ رقمی اختصاصی\n"
+        "├ 🎟️ سیستم ثبت کد دعوت\n"
+        "├ ⭐ امتیاز به ازای هر دعوت\n"
+        "├ 🏆 جدول برترین دعوت‌کنندگان\n"
+        "└ 💎 امتیاز دو طرف (دعوت‌کننده و دعوت‌شده)\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚙️ **ابزارهای مدیریتی**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🗑️ حذف فوری پیام\n"
+        "├ ⏱️ حذف با تایمر (به دقیقه)\n"
+        "├ 🚫 فیلتر کلمات (۵۰ کلمه)\n"
+        "├ ❌ حذف از لیست فیلتر\n"
+        "├ 📋 لیست کلمات فیلترشده\n"
+        "├ 📢 تبلیغ خودکار هر ۵ ساعت\n"
+        "├ 🎯 تبلیغ ۲۰۰ پیامی با کول‌داون\n"
+        "└ 📚 راهنمای کامل\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "👤 **دستورات کاربران**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `مقام` → مقام شما\n"
+        "├ `پروفایل` یا `آمار` → پروفایل\n"
+        "├ `تاپ` → برترین‌های گروه\n"
+        "├ `ساعت` → ساعت و تاریخ\n"
+        "├ `تنظیم اصل [نام]`\n"
+        "├ `تنظیم لقب [نام]`\n"
+        "├ `جک` / `ضرب المثل`\n"
+        "├ `دانستی` / `فکت`\n"
+        "├ `پ ن پ` / `شعر`\n"
+        "├ `فال` / `شانس`\n"
+        "└ `راهنما` → راهنمای کامل\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "👑 **دستورات مالک / ویژه**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `فعال` / `غیرفعال` → روشن/خاموش\n"
+        "├ `بن` / `سیک` / `اخراج` (ریپلای)\n"
+        "├ `انبن` (ریپلای)\n"
+        "├ `سکوت [دقیقه]` (ریپلای)\n"
+        "├ `اخطار` (ریپلای)\n"
+        "├ `حذف اخطار` (ریپلای)\n"
+        "├ `حذف اخطار [عدد]` (ریپلای)\n"
+        "├ `تنظیم اخطار [عدد]`\n"
+        "├ `حذف پیام اخطار [ثانیه]`\n"
+        "├ `ویژه` (ریپلای)\n"
+        "├ `حذف ویژه` (ریپلای)\n"
+        "├ `فیلتر [کلمه]`\n"
+        "├ `حذف فیلتر [کلمه]`\n"
+        "├ `لیست فیلتر`\n"
+        "├ `حذف` (ریپلای) → حذف فوری\n"
+        "├ `حذف [دقیقه]` (ریپلای)\n"
+        "├ `قفل گروه` / `باز`\n"
+        "├ `قفل [ساعت]`\n"
+        "├ `قفل 13:00 14:00`\n"
+        "├ `لیست قفل گروه`\n"
+        "└ `لیست گروه ها` (فقط مالک توی پیوی)\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "👋 **خوش‌آمدگویی سفارشی**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `تنظیم پیام خوش آمدگویی [متن]`\n"
+        "├ `حذف پیام خوش آمدگویی`\n"
+        "└ `نمایش پیام خوش آمدگویی`\n"
+        "💡 متغیرها: {name}، {group}، {time}\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎮 **بازی دوز چهارتایی**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `دوز` → شروع بازی\n"
+        "├ `دوز قرمز` / `دوز زرد` → انتخاب رنگ\n"
+        "├ `شرکت` → پیوستن به بازی\n"
+        "├ `1` تا `7` → انداختن مهره\n"
+        "├ `انصراف` → لغو بازی\n"
+        "└ 🏆 ۴ مهره پشت سر هم = برد\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "✨ **چرا FluxBot؟**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ سرعت بالا و بدون تاخیر\n"
+        "🎯 مدیریت هوشمند و دقیق\n"
+        "🔐 امنیت کامل گروه شما\n"
+        "💎 رابط کاربری زیبا و مدرن\n"
+        "🚀 به‌روزرسانی مداوم\n"
+        "🎮 سرگرمی بی‌نظیر برای اعضا\n"
+        "📊 گزارش‌گیری دقیق\n"
+        "💾 حفظ کامل اطلاعات\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🔗 **ربات رو به گروهت اضافه کن:**\n"
+        "👉 **@Flux1bot**\n\n"
+        "📢 **کانال رسمی:**\n"
+        "➣ **@RPCITY_PHANTOM**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | 🌊 **جریان قدرت**"
+    )
+
+
 def load_cache():
     for path in CACHE_PATHS:
         try:
@@ -701,8 +849,8 @@ def load_data():
         "invite_codes": {}, "code_to_user": {}, "points": {}, "invited_users": {},
         "known_users": {}, "games": {},
         "group_locks": {}, "temp_locks": {}, "scheduled_locks": {}, "mute_list": {},
-        # 🆕 برای کول‌داون تبلیغ
         "last_chat_promo": {},
+        "custom_welcome": {},
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -951,13 +1099,14 @@ def build_keypad():
         b6 = b.button_simple(id="btn_invite_enter", text=BTN_INVITE_ENTER)
         b7 = b.button_simple(id="btn_invite_show", text=BTN_INVITE_SHOW)
         b8 = b.button_simple(id="btn_points", text=BTN_POINTS)
-        b9 = b.button_simple(id="btn_top_inviters", text=BTN_TOP_INVITERS)
+        b9 = b.button_simple(id="btn_features", text=BTN_FEATURES)
+        b10 = b.button_simple(id="btn_top_inviters", text=BTN_TOP_INVITERS)
         b.row(b1, b2)
         b.row(b3, b4)
         b.row(b5)
         b.row(b6, b7)
-        b.row(b8)
-        b.row(b9)
+        b.row(b8, b9)
+        b.row(b10)
         return b.build()
     except Exception as e:
         print(f"❌ KEYPAD: {e}", flush=True)
@@ -1016,6 +1165,7 @@ def get_help_text():
         "├ 👑 `مقام`\n├ 📊 `پروفایل`\n├ 🏆 `آمار گروه`\n├ ⏰ `ساعت`\n"
         "├ 🐺 `تنظیم اصل [نام]`\n├ 🎭 `تنظیم لقب [نام]`\n"
         "├ 🎟️ `زدن کد دعوت`\n├ 🎫 `کد دعوت من`\n├ ⭐ `امتیاز من`\n"
+        "├ 📖 `قابلیت‌های ربات`\n"
         "├ 🏆 `لیست برتر دعوت‌کنندگان`\n├ 🎮 `لیست بازی`\n"
         "├ 😂 `جک` / 📜 `ضرب المثل`\n├ 💡 `دانستی` / 🧠 `فکت`\n"
         "├ 💚 `پ ن پ` / 📝 `شعر`\n├ 🔮 `فال` / 🍀 `شانس`\n"
@@ -1030,6 +1180,10 @@ def get_help_text():
         "├ ❌ `حذف اخطار [عدد]` (ریپلای)\n├ ⚙️ `تنظیم اخطار [عدد]`\n"
         "├ ⏱️ `حذف پیام اخطار [ثانیه]`\n├ ⭐ `ویژه` (ریپلای)\n"
         "├ ❌ `حذف ویژه` (ریپلای)\n├ 🚫 `فیلتر [کلمه]`\n└ 📋 `لیست فیلتر`\n\n"
+        "👋 **خوش‌آمدگویی سفارشی:**\n"
+        "├ `تنظیم پیام خوش آمدگویی [متن]`\n"
+        "├ `حذف پیام خوش آمدگویی`\n"
+        "└ `نمایش پیام خوش آمدگویی`\n\n"
         "🗑️ **مدیریت پیام:**\n"
         "├ 🗑️ `حذف` (ریپلای)\n└ ⏱️ `حذف [دقیقه]` (ریپلای)\n\n"
         "🔒 **قفل گروه:**\n"
@@ -1102,6 +1256,28 @@ async def process_invite_code(chat_id, user_id, code):
         f"✅ **تبریک!**\n\n🎉 با کد دعوت وارد شدید!\n\n"
         f"👤 **صاحب کد:** {owner_display}\n⭐ +۱ امتیاز\n⭐ شما +۱ امتیاز\n\n"
         f"💎 **امتیاز فعلی:** {get_points(user_id)}\n\n⚡ **FLUXBOT**"
+    )
+
+
+def get_welcome_text(chat_id, chat_name, display_name):
+    """🆕 متن خوش‌آمدگویی سفارشی یا پیش‌فرض"""
+    custom = bot_data.get("custom_welcome", {}).get(chat_id)
+    now_str = get_now_time()
+    if custom:
+        # جایگزینی متغیرها
+        text = custom.replace("{name}", display_name)
+        text = text.replace("{group}", chat_name)
+        text = text.replace("{time}", now_str)
+        return text
+    # پیش‌فرض
+    return (
+        f"╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+        f"🌟 **به گروه {chat_name} خوش آمدید!** 🌟\n\n"
+        f"👤 **{display_name} عزیز:**\nخوشحالیم که به ما پیوستید. 🌹\n\n"
+        f"⏰ **ورود:** {now_str}\n\n"
+        f"💎 **امکانات:**\n"
+        f"├ 📊 `پروفایل`\n├ 🎮 `دوز`\n"
+        f"├ 🐺 `تنظیم اصل [نام]`\n└ 📚 `راهنما`\n\n⚡ **FLUXBOT**"
     )
 
 
@@ -1208,6 +1384,11 @@ async def handle_message(bot, message):
                     f"💎 **امتیاز:** `{pts}`\n👥 **دعوت‌شده:** `{invited}`\n🎫 **کد:** `{code}`\n\n⚡ **FLUXBOT**"))
                 return
 
+            # 🆕 دکمه قابلیت‌ها
+            if button_id == "btn_features" or raw_text == BTN_FEATURES or clean_text in ("قابلیت ها", "قابلیت‌ها", "قابلیت های ربات"):
+                await send_long_message(chat_id, get_features_text())
+                return
+
             if button_id == "btn_top_inviters" or raw_text == BTN_TOP_INVITERS:
                 text = await get_top_inviters_text()
                 await send_long_message(chat_id, text)
@@ -1271,6 +1452,49 @@ async def handle_message(bot, message):
 
         if clean_text in ("لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "بازی ها", "بازی‌ها"):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=get_games_list_text())
+            return
+
+        # 🆕 تنظیم پیام خوش‌آمدگویی (فقط مالک)
+        cwm = re.match(r"^تنظیم\s+پیام\s+خوش\s*آمدگویی\s+(.+)$", clean_text)
+        if cwm:
+            if not is_owner_group: return
+            welcome_text = cwm.group(1).strip()
+            if not welcome_text:
+                await bot.send_message(chat_id=chat_id, text="⚠️ متن را وارد کنید.", reply_to_message_id=message.message_id)
+                return
+            if "custom_welcome" not in bot_data: bot_data["custom_welcome"] = {}
+            bot_data["custom_welcome"][chat_id] = welcome_text
+            save_data(bot_data, force=True)
+            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                "✅ **پیام خوش‌آمدگویی تنظیم شد!**\n\n"
+                "📌 **متن تنظیم‌شده:**\n"
+                f"{welcome_text}\n\n"
+                "💡 متغیرها:\n"
+                "├ `{name}` → نام کاربر\n"
+                "├ `{group}` → نام گروه\n"
+                "└ `{time}` → زمان ورود\n\n"
+                "⚡ **FLUXBOT**"))
+            return
+
+        if is_command(clean_text, "حذف پیام خوش آمدگویی", "حذف پیام خوش‌آمدگویی", "پاک پیام خوش آمدگویی"):
+            if not is_owner_group: return
+            if "custom_welcome" not in bot_data: bot_data["custom_welcome"] = {}
+            if chat_id in bot_data["custom_welcome"]:
+                del bot_data["custom_welcome"][chat_id]
+                save_data(bot_data, force=True)
+                await bot.send_message(chat_id=chat_id, text="✅ **پیام خوش‌آمدگویی حذف شد.** الان پیام پیش‌فرض ارسال می‌شه.", reply_to_message_id=message.message_id)
+            else:
+                await bot.send_message(chat_id=chat_id, text="ℹ️ پیام سفارشی تنظیم نشده.", reply_to_message_id=message.message_id)
+            return
+
+        if is_command(clean_text, "نمایش پیام خوش آمدگویی", "نمایش پیام خوش‌آمدگویی"):
+            if not can_manage: return
+            custom = bot_data.get("custom_welcome", {}).get(chat_id)
+            if custom:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "📋 **پیام خوش‌آمدگویی فعلی:**\n\n" + custom + "\n\n⚡ **FLUXBOT**"))
+            else:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="ℹ️ پیام پیش‌فرض فعاله.")
             return
 
         # === بازی دوز ===
@@ -1371,6 +1595,10 @@ async def handle_message(bot, message):
         # === دستورات ===
         if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands"):
             await send_long_message(chat_id, get_help_text(), reply_to_message_id=message.message_id)
+            return
+
+        if is_command(clean_text, "قابلیت ها", "قابلیت‌ها", "قابلیت های ربات", "قابلیت"):
+            await send_long_message(chat_id, get_features_text(), reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "ساعت", "زمان"):
@@ -1574,13 +1802,11 @@ async def handle_message(bot, message):
                 bot_data["mute_list"][chat_id] = chat_mutes
                 save_data(bot_data, force=True)
 
-        # ================== شمارنده ۲۰۰ پیام با کول‌داون ==================
         if chat_id not in bot_data["group_message_count"]: bot_data["group_message_count"][chat_id] = 0
         bot_data["group_message_count"][chat_id] += 1
         if bot_data["group_message_count"][chat_id] >= PROMO_MSG_THRESHOLD:
             bot_data["group_message_count"][chat_id] = 0
             save_data(bot_data, force=True)
-            # 🆕 چک کول‌داون
             if can_send_promo_to_chat(chat_id):
                 try:
                     await bot.send_message(chat_id=chat_id, text=get_promo_text())
@@ -1598,16 +1824,9 @@ async def handle_message(bot, message):
             welcomed = bot_data.get("welcomed_users", {}).get(chat_id, {})
             if sender_id not in welcomed:
                 cn = await get_chat_name(chat_id)
-                ns = get_now_time()
+                welcome_msg = get_welcome_text(chat_id, cn, disp)
                 try:
-                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                        f"╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
-                        f"🌟 **به گروه {cn} خوش آمدید!** 🌟\n\n"
-                        f"👤 **{disp} عزیز:**\nخوشحالیم که به ما پیوستید. 🌹\n\n"
-                        f"⏰ **ورود:** {ns}\n\n"
-                        f"💎 **امکانات:**\n"
-                        f"├ 📊 `پروفایل`\n├ 🎮 `دوز`\n"
-                        f"├ 🐺 `تنظیم اصل [نام]`\n└ 📚 `راهنما`\n\n⚡ **FLUXBOT**"))
+                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=welcome_msg)
                 except Exception as e:
                     print(f"⚠️ welcome: {e}", flush=True)
                 if chat_id not in bot_data["welcomed_users"]: bot_data["welcomed_users"][chat_id] = {}
@@ -1998,9 +2217,8 @@ async def handle_message(bot, message):
 
 
 async def auto_promo_task():
-    """🆕 تبلیغ خودکار هر ۵ ساعت با کول‌داون هر گروه"""
     print(f"⏰ AUTO PROMO STARTED (every {PROMO_INTERVAL // 3600} hours)", flush=True)
-    await asyncio.sleep(180)  # ۳ دقیقه صبر اولیه
+    await asyncio.sleep(180)
     while True:
         try:
             if not bot_data.get("settings", {}).get("auto_promo", True):
@@ -2010,7 +2228,6 @@ async def auto_promo_task():
             sent = 0
             skipped = 0
             for gid in groups:
-                # 🆕 چک کول‌داون
                 if not can_send_promo_to_chat(gid):
                     skipped += 1
                     continue
@@ -2019,7 +2236,7 @@ async def auto_promo_task():
                     mark_promo_sent(gid)
                     sent += 1
                     save_data(bot_data, force=True)
-                    await asyncio.sleep(3)  # ۳ ثانیه بین گروه‌ها
+                    await asyncio.sleep(3)
                 except Exception as e:
                     print(f"⚠️ promo {gid}: {e}", flush=True)
             bot_data["last_promo_time"] = {"time": time.time(), "sent": sent, "skipped": skipped}
