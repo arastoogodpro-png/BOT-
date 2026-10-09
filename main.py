@@ -33,7 +33,7 @@ BTN_DEV = "👑 سازنده ربات"
 MAX_FILTER_WORDS = 50
 
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
-PROMO_INTERVAL = 2 * 60 * 60
+PROMO_INTERVAL = 4 * 60 * 60  # هر 4 ساعت
 
 username_cache = {}
 mute_list = {}
@@ -88,6 +88,41 @@ def extract_msg_id(result):
             return str(result.message_id)
     except: pass
     return None
+
+
+def split_long_text(text, max_len=1500):
+    """تقسیم متن طولانی به تکه‌های کوچک‌تر"""
+    if not text: return [""]
+    if len(text) <= max_len: return [text]
+    parts = []
+    while len(text) > max_len:
+        cut = text.rfind('\n', 0, max_len)
+        if cut == -1 or cut < 100:
+            cut = max_len
+        parts.append(text[:cut])
+        text = text[cut:].lstrip()
+    if text:
+        parts.append(text)
+    return parts
+
+
+async def send_long_message(chat_id, text, reply_to_message_id=None):
+    """ارسال متن طولانی به صورت تکه‌تکه"""
+    parts = split_long_text(text, 1500)
+    first_result = None
+    for i, part in enumerate(parts):
+        try:
+            kwargs = {"chat_id": chat_id, "text": part}
+            if reply_to_message_id and i == 0:
+                kwargs["reply_to_message_id"] = reply_to_message_id
+            result = await bot.send_message(**kwargs)
+            if i == 0:
+                first_result = result
+            if i < len(parts) - 1:
+                await asyncio.sleep(0.4)
+        except Exception as e:
+            print(f"❌ PART {i} FAIL: {e}", flush=True)
+    return first_result
 
 
 PROFANITY_LIST = [
@@ -187,7 +222,7 @@ def text_contains(text, keyword):
     if not text: return False
     n = normalize_text(text)
     nk = normalize_text(keyword)
-    return nk and nk in n
+    return bool(nk) and nk in n
 
 
 def is_group_chat(chat_id):
@@ -556,6 +591,42 @@ def get_promo_text():
     )
 
 
+def get_education_text():
+    """متن آموزش فعال‌سازی"""
+    return (
+        "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+        "   ⚡ **FLUXBOT** ⚡\n"
+        "   📚 آموزش فعال‌سازی 📚\n"
+        "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+        "🌟 **مراحل فعال‌سازی ربات FluxBot:**\n\n"
+        "1️⃣ **افزودن ربات به گروه:**\n"
+        "└ روی گزینه «افزودن به گروه» بزنید\n\n"
+        "2️⃣ **دسترسی کامل بدهید:**\n"
+        "├ ربات را در گروه **ادمین** کنید\n"
+        "├ دسترسی «حذف پیام» را فعال کنید\n"
+        "└ دسترسی «مشاهده پیام‌ها» را فعال کنید\n\n"
+        "3️⃣ **تنظیمات حریم خصوصی:**\n"
+        "└ در تنظیمات گروه، گزینه\n"
+        "   «دریافت همه پیام‌های گروه»\n"
+        "   را فعال کنید\n\n"
+        "4️⃣ **منتظر بمانید:**\n"
+        "└ بین ۱ تا ۲ دقیقه صبر کنید\n\n"
+        "5️⃣ **فعال‌سازی:**\n"
+        "└ در گروه بنویسید: `فعال`\n"
+        "└ ربات با پیام «✅ ربات فعال شد»\n"
+        "   پاسخ می‌دهد\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "💡 **نکات مهم:**\n"
+        "├ برای دیدن راهنما: `راهنما`\n"
+        "├ برای قفل‌ها: `لیست قفل`\n"
+        "└ برای پروفایل: `پروفایل`\n\n"
+        "📢 **کانال رسمی:**\n"
+        "➣ **@RPCITY_PHANTOM**\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ **FLUXBOT** | جریان قدرت"
+    )
+
+
 def get_dev_text():
     return (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
@@ -599,6 +670,7 @@ def get_help_text():
         "├ 🔮 `فال`\n"
         "├ 🍀 `شانس`\n"
         "└ 📚 `راهنما`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "👑 **دستورات مالک / ویژه:**\n"
         "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
         "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
@@ -611,23 +683,31 @@ def get_help_text():
         "├ 🚫 `فیلتر [کلمه]`\n"
         "├ ❌ `حذف فیلتر [کلمه]`\n"
         "└ 📋 `لیست فیلتر`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "🗑️ **مدیریت پیام:**\n"
-        "├ 🗑️ `حذف` (ریپلای)\n"
-        "└ ⏱️ `حذف [دقیقه]` (ریپلای)\n\n"
+        "├ 🗑️ `حذف` (ریپلای) → حذف فوری\n"
+        "└ ⏱️ `حذف [دقیقه]` (ریپلای)\n"
+        "    مثال: `حذف 5` = 5 دقیقه\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "🔒 **قفل گروه:**\n"
-        "├ 🔒 `قفل گروه`\n"
-        "├ ⏱️ `قفل [ساعت]`\n"
-        "├ ⏰ `قفل 13:00 14:00`\n"
-        "├ 🔓 `باز`\n"
+        "├ 🔒 `قفل گروه` → قفل دستی\n"
+        "├ ⏱️ `قفل [ساعت]` → قفل موقت\n"
+        "├ ⏰ `قفل 13:00 14:00` → قفل روزانه\n"
+        "├ 🔓 `باز` → باز کردن\n"
         "├ 📋 `لیست قفل گروه`\n"
         "└ ❌ `حذف قفل زمان‌بندی`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "⚙️ **قفل‌ها (باز/بسته):**\n"
-        "├ 🔗 `لینک` / 🆔 `آیدی`\n"
-        "├ 📢 `اسپم` / 🔗 `هایپرلینک`\n"
-        "├ 🤬 `فحش` / 📨 `فوروارد`\n"
-        "├ 🎞️ `گیف` / 👋 `خداحافظی`\n"
+        "├ 🔗 `لینک` → حذف لینک‌ها\n"
+        "├ 🆔 `آیدی` → حذف @username\n"
+        "├ 📢 `اسپم` → ضد اسپم\n"
+        "├ 🔗 `هایپرلینک` → حذف لینک مخفی\n"
+        "├ 🤬 `فحش` → حذف فحش\n"
+        "├ 📨 `فوروارد` یا `هدایت`\n"
+        "├ 🎞️ `گیف` → حذف گیف\n"
+        "├ 👋 `خداحافظی`\n"
         "├ 👋 `خوش‌آمدگویی`\n"
-        "└ 📋 `لیست قفل`\n\n"
+        "└ 📋 `لیست قفل` → وضعیت همه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚡ **FLUXBOT** | جریان قدرت"
     )
@@ -689,19 +769,32 @@ async def handle_message(bot, message):
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
 
+        # ============ پیوی ============
         if is_private_chat(chat_id):
+            # تشخیص دکمه‌ها
             if button_id == "btn_channel" or raw_text == BTN_CHANNEL or text_contains(raw_text, "کانال"):
-                await bot.send_message(chat_id=chat_id, text=get_channel_text()); return
-            if button_id == "btn_help" or raw_text == BTN_HELP or text_contains(raw_text, "آموزش"):
-                await bot.send_message(chat_id=chat_id, text=get_help_text()); return
+                print(f"📢 PV: channel button", flush=True)
+                await bot.send_message(chat_id=chat_id, text=get_channel_text())
+                return
+            if button_id == "btn_help" or raw_text == BTN_HELP or text_contains(raw_text, "آموزش") or text_contains(raw_text, "فعال سازی") or text_contains(raw_text, "فعالسازی"):
+                print(f"📚 PV: education button", flush=True)
+                await send_long_message(chat_id, get_education_text())
+                return
             if button_id == "btn_users" or raw_text == BTN_USERS or text_contains(raw_text, "کاربران"):
-                await bot.send_message(chat_id=chat_id, text=get_users_text()); return
+                print(f"👥 PV: users button", flush=True)
+                await bot.send_message(chat_id=chat_id, text=get_users_text())
+                return
             if button_id == "btn_groups" or raw_text == BTN_GROUPS or text_contains(raw_text, "گروه"):
-                await bot.send_message(chat_id=chat_id, text=get_groups_text()); return
+                print(f"🏠 PV: groups button", flush=True)
+                await bot.send_message(chat_id=chat_id, text=get_groups_text())
+                return
             if button_id == "btn_dev" or raw_text == BTN_DEV or text_contains(raw_text, "سازنده"):
-                await bot.send_message(chat_id=chat_id, text=get_dev_text()); return
+                print(f"👑 PV: dev button", flush=True)
+                await bot.send_message(chat_id=chat_id, text=get_dev_text())
+                return
 
             if is_command(clean_text, "start", "شروع", "منو"):
+                print(f"🤖 PV: start menu", flush=True)
                 text = (
                     "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
                     "🌟 **به ربات مدیریتی FluxBot خوش آمدید!**\n\n"
@@ -710,12 +803,18 @@ async def handle_message(bot, message):
                 )
                 kp = build_keypad()
                 if kp:
-                    try: await bot.send_message(chat_id=chat_id, text=text, chat_keypad=kp, chat_keypad_type="New")
-                    except: await bot.send_message(chat_id=chat_id, text=text)
-                else: await bot.send_message(chat_id=chat_id, text=text)
+                    try:
+                        await bot.send_message(chat_id=chat_id, text=text, chat_keypad=kp, chat_keypad_type="New")
+                        print(f"✅ PV: keypad sent", flush=True)
+                    except Exception as e:
+                        print(f"❌ KEYPAD SEND: {e}", flush=True)
+                        await bot.send_message(chat_id=chat_id, text=text)
+                else:
+                    await bot.send_message(chat_id=chat_id, text=text)
                 return
             return
 
+        # ============ گروه ============
         if not is_group_chat(chat_id): return
 
         ui = await get_user_info(chat_id, sender_id)
@@ -725,16 +824,18 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner or is_special
 
+        # قفل گروه
         locked, reason = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             except: pass
             return
 
-        # راهنما (اول از همه)
+        # ============ راهنما (اول از همه) ============
         if is_command(clean_text, "راهنما", "help", "دستورات", "دستور", "commands"):
-            print(f"📚 HELP CMD", flush=True)
-            await bot.send_message(chat_id=chat_id, text=get_help_text(), reply_to_message_id=message.message_id)
+            print(f"📚 GROUP: help cmd", flush=True)
+            await send_long_message(chat_id, get_help_text(), reply_to_message_id=message.message_id)
+            print(f"✅ HELP SENT", flush=True)
             return
 
         # ⏰ ساعت
@@ -1288,7 +1389,7 @@ async def handle_message(bot, message):
 
 
 async def auto_promo_task():
-    print("⏰ AUTO PROMO STARTED (every 2 hours)", flush=True)
+    print(f"⏰ AUTO PROMO STARTED (every {PROMO_INTERVAL // 3600} hours)", flush=True)
     await asyncio.sleep(120)
     while True:
         try:
@@ -1306,7 +1407,7 @@ async def auto_promo_task():
                 except: pass
             bot_data["last_promo_time"] = {"time": time.time(), "sent": sent}
             save_data(bot_data, force=True)
-            print(f"💤 PROMO SLEEP 2h | sent={sent}", flush=True)
+            print(f"💤 PROMO SLEEP {PROMO_INTERVAL // 3600}h | sent={sent}", flush=True)
             await asyncio.sleep(PROMO_INTERVAL)
         except Exception as e:
             print(f"❌ PROMO: {e}", flush=True)
@@ -1317,6 +1418,7 @@ async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"🌍 TZ: Iran (UTC+3:30)", flush=True)
     print(f"📢 CHANNEL: {CHANNEL_USERNAME}", flush=True)
+    print(f"⏰ PROMO: every {PROMO_INTERVAL // 3600} hours", flush=True)
     try: asyncio.create_task(auto_promo_task())
     except Exception as e: print(f"⚠️ PROMO START: {e}", flush=True)
     try: await bot.run()
