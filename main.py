@@ -82,7 +82,7 @@ def match_two_word_cmd(text, word):
     return None
 
 
-# ================== 💬 TALKATIVE (سخنگو) - Keyword Based ==================
+# ================== 💬 TALKATIVE (سخنگو) ==================
 TALKATIVE_MAP = {
     ("ربات فلکس بات", "ربات فلاکس بات", "ربات فلوکس بات",
      "فلکس بات", "فلاکس بات", "فلوکس بات", "فلکسی بات",
@@ -270,10 +270,31 @@ TALKATIVE_PHRASES = []
 for _keys, _reps in TALKATIVE_MAP.items():
     TALKATIVE_PHRASES.extend(_reps)
 
+
+# 🆕 تابع کمکی برای تشخیص کلیدواژه‌های ترکیبی (space یا ZWNJ یا tab)
+def _is_talkative_phrase(kw):
+    for c in kw:
+        if c in ' \u200c\u200d\t':
+            return True
+    return False
+
+
 _TALKATIVE_FLAT = []
+_seen_kw = set()
 for _keys, _reps in TALKATIVE_MAP.items():
     for _k in _keys:
-        _TALKATIVE_FLAT.append((_k.lower(), _reps))
+        _k_lower = _k.lower()
+        _is_p = _is_talkative_phrase(_k_lower)
+        # نسخه اصلی
+        if _k_lower not in _seen_kw:
+            _TALKATIVE_FLAT.append((_k_lower, _reps, _is_p))
+            _seen_kw.add(_k_lower)
+        # نسخه بدون ZWNJ (برای ورودی کاربر)
+        _k_clean = _k_lower.replace('\u200c', '').replace('\u200d', '')
+        if _k_clean != _k_lower and _k_clean not in _seen_kw:
+            _TALKATIVE_FLAT.append((_k_clean, _reps, _is_talkative_phrase(_k_clean)))
+            _seen_kw.add(_k_clean)
+
 _TALKATIVE_FLAT.sort(key=lambda x: -len(x[0]))
 
 
@@ -281,14 +302,22 @@ def get_talkative_reply(text):
     if not text: return None
     t = text.strip().lower()
     if not t: return None
+    # نسخه بدون ZWNJ
+    t_clean = t.replace('\u200c', '').replace('\u200d', '')
+    # تقسیم کلمات
     words = [w.strip() for w in re.split(r'[\s,،.!?؟:;()\[\]{}«»\-\u200c]+', t) if w.strip()]
+    words_clean = [w.strip() for w in re.split(r'[\s,،.!?؟:;()\[\]{}«»\-\u200c]+', t_clean) if w.strip()]
     if not words: return None
     words_set = set(words)
-    for kw, reps in _TALKATIVE_FLAT:
-        if ' ' in kw:
-            if kw in t: return reps
+    words_clean_set = set(words_clean)
+
+    for kw, reps, is_phrase in _TALKATIVE_FLAT:
+        if is_phrase:
+            if kw in t or kw in t_clean:
+                return reps
         else:
-            if kw in words_set: return reps
+            if kw in words_set or kw in words_clean_set:
+                return reps
     return None
 
 
@@ -419,6 +448,7 @@ async def game_timeout_check(chat_id, game_type):
                     await bot.send_message(chat_id=chat_id, text=(
                         "⏱️ **زمان بازی به پایان رسید!**\n\n"
                         "هیچ‌کس شرکت نکرد و بازی لغو شد.\n\n⚡ **FLUXBOT**"))
+                    print(f"⏱️ Connect4 timeout: {chat_id}", flush=True)
                 except: pass
         elif game_type == "coinflip":
             if chat_id in coin_flip_games:
@@ -427,6 +457,7 @@ async def game_timeout_check(chat_id, game_type):
                     await bot.send_message(chat_id=chat_id, text=(
                         "⏱️ **زمان انتخاب به پایان رسید!**\n\n"
                         "بازی شیر یا خط لغو شد.\n\n⚡ **FLUXBOT**"))
+                    print(f"⏱️ CoinFlip timeout: {chat_id}", flush=True)
                 except: pass
     except Exception as e:
         print(f"⚠️ game_timeout: {e}", flush=True)
@@ -1020,7 +1051,6 @@ LUCK = [
 ]
 
 
-# ============ 🎯 CHALLENGES ============
 CHALLENGE_TEXTS = [
     "🎯 **چالش امروز:**\n\nبه ۳ نفر از اعضای این گروه یه تعریف **واقعی** بگو! 💬",
     "🔥 **چالش:**\n\nآخرین باری که به کسی کمک کردی کِی بود؟ همینجا تعریف کن! 🤝",
@@ -2186,7 +2216,6 @@ async def handle_message(bot, message):
     global bot_is_active, message_cache, bot_data, settings, text_dedup
 
     try:
-        # 🔑 استخراج ایمن
         try:
             msg_id_raw = getattr(message, "message_id", None)
             msg_id = str(msg_id_raw) if msg_id_raw is not None else ""
@@ -2202,7 +2231,6 @@ async def handle_message(bot, message):
         invalid_ids = ("", "None", "none", "NULL", "null", "0", "False", "false")
         is_valid_mid = msg_id and msg_id not in invalid_ids and not msg_id.startswith("<")
 
-        # 🖊️ ویرایش (فقط اگه msg_id معتبر)
         if is_valid_mid:
             pm_key = f"{chat_id}:{msg_id}"
             prev_text = processed_messages.get(pm_key)
@@ -2248,7 +2276,7 @@ async def handle_message(bot, message):
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
 
-        # ============ 📢 ارسال پیام همگانی (فقط مالک) ============
+        # ============ 📢 ارسال پیام همگانی ============
         broadcast_match = re.match(r"^ارسال\s+پیام\s+همگانی\s+گروه\s+([\s\S]+)$", raw_text.strip())
         if broadcast_match:
             if not is_owner_check: return
@@ -2412,7 +2440,6 @@ async def handle_message(bot, message):
         # ============ گروه ============
         if not is_group_chat(chat_id): return
 
-        # 1️⃣ اطلاعات کاربر
         ui = await get_user_info(chat_id, sender_id)
         role = ui["role"]
         disp = format_user_display(ui, sender_id)
@@ -2420,7 +2447,6 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner_group or is_special
 
-        # 2️⃣ چک قفل گروه
         locked, _ = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2428,7 +2454,6 @@ async def handle_message(bot, message):
                 print(f"⚠️ delete locked: {e}", flush=True)
             return
 
-        # 3️⃣ چک سکوت
         now = time.time()
         chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
         if sender_id in chat_mutes:
@@ -2443,7 +2468,6 @@ async def handle_message(bot, message):
                 bot_data["mute_list"][chat_id] = chat_mutes
                 save_data(bot_data, force=True)
 
-        # 4️⃣ چک حالت آهسته
         if not can_manage:
             slow_sec = bot_data.get("slow_mode", {}).get(chat_id)
             if slow_sec:
@@ -2455,14 +2479,12 @@ async def handle_message(bot, message):
                         await add_warning(chat_id, sender_id, "ارسال سریع در حالت آهسته", user_info=ui)
                     return
 
-        # 5️⃣ چک ضد تکرار
         if not can_manage and is_valid_mid:
             ar_limit = bot_data.get("anti_repeat", {}).get(chat_id)
             if ar_limit and raw_text:
                 if await handle_repeat_check(chat_id, sender_id, msg_id, raw_text, ar_limit, ui):
                     return
 
-        # 6️⃣ چک ضد اسپم
         if settings["spam"] and not can_manage:
             if chat_id not in spam_tracker: spam_tracker[chat_id] = {}
             if sender_id not in spam_tracker[chat_id]: spam_tracker[chat_id][sender_id] = []
@@ -2479,7 +2501,6 @@ async def handle_message(bot, message):
 
         # 7️⃣ قفل‌های محتوا (قبل از همه دستورات!)
         if bot_is_active and not can_manage:
-            # فحش
             if settings.get("profanity", True):
                 if contains_profanity(raw_text):
                     try:
@@ -2488,7 +2509,6 @@ async def handle_message(bot, message):
                     except Exception as e:
                         print(f"⚠️ delete profanity: {e}", flush=True)
                     return
-            # فیلتر
             if settings["filter"]:
                 fl = ensure_list_dict(bot_data, "filtered_words", chat_id)
                 if contains_filtered_word(raw_text, fl):
@@ -2498,7 +2518,6 @@ async def handle_message(bot, message):
                     except Exception as e:
                         print(f"⚠️ delete filter: {e}", flush=True)
                     return
-            # لینک
             if settings["link"] and contains_link(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2506,7 +2525,6 @@ async def handle_message(bot, message):
                 except Exception as e:
                     print(f"⚠️ delete link: {e}", flush=True)
                 return
-            # هایپرلینک
             if settings["hyperlink"] and contains_hyperlink(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2514,7 +2532,6 @@ async def handle_message(bot, message):
                 except Exception as e:
                     print(f"⚠️ delete hyperlink: {e}", flush=True)
                 return
-            # آیدی
             if settings["id"] and contains_id(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2522,7 +2539,6 @@ async def handle_message(bot, message):
                 except Exception as e:
                     print(f"⚠️ delete id: {e}", flush=True)
                 return
-            # فوروارد
             if settings.get("forward", False) and is_forwarded(message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2530,7 +2546,6 @@ async def handle_message(bot, message):
                 except Exception as e:
                     print(f"⚠️ delete forward: {e}", flush=True)
                 return
-            # گیف
             if settings.get("gif", False) and is_gif(message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2539,7 +2554,11 @@ async def handle_message(bot, message):
                     print(f"⚠️ delete gif: {e}", flush=True)
                 return
 
-        # 8️⃣ خوش‌آمدگویی برای کاربر جدید
+        # 🛑 اگه ربات غیرفعاله، برای کاربرای عادی هیچ کاری نکن
+        if not bot_is_active and not can_manage:
+            return
+
+        # 8️⃣ خوش‌آمدگویی
         if settings.get("welcome", True) and bot_is_active and not can_manage:
             welcomed = bot_data.get("welcomed_users", {}).get(chat_id, {})
             if sender_id not in welcomed:
@@ -2553,7 +2572,7 @@ async def handle_message(bot, message):
                 bot_data["welcomed_users"][chat_id][sender_id] = True
                 save_data(bot_data)
 
-        # 9️⃣ ثبت پیام کاربر در آمار
+        # 9️⃣ ثبت آمار
         today = get_local_now().strftime("%Y-%m-%d")
         if chat_id not in bot_data["message_counts"]: bot_data["message_counts"][chat_id] = {}
         if sender_id not in bot_data["message_counts"][chat_id]:
@@ -2631,7 +2650,7 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
-        # 🔄 قفل‌های دوکلمه‌ای - بقیه
+        # 🔄 بقیه قفل‌های دوکلمه‌ای
         lock_words_map = {
             "لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
             "خوش‌آمدگویی": "welcome", "خوشآمدگویی": "welcome",
@@ -2836,7 +2855,8 @@ async def handle_message(bot, message):
             color_emoji = RED if game["color1"] == "R" else YELLOW
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"🎮 **بازی دوز شروع شد!**\n\n👤 **سازنده:** {disp}\n🎨 **رنگ:** {color_emoji}\n\n"
-                f"⏳ **منتظر حریف...**\n\n📌 برای پیوستن: `شرکت`\n\n⚡ **FLUXBOT**"))
+                f"⏳ **منتظر حریف...**\n\n📌 برای پیوستن: `شرکت`\n"
+                f"⏱️ اگه ۲ دقیقه کسی نیاد، خودکار لغو می‌شه.\n\n⚡ **FLUXBOT**"))
             return
 
         if clean_text in ("بازی شیر یا خط", "شیر یا خط", "شیریا خط"):
@@ -3462,7 +3482,7 @@ async def handle_message(bot, message):
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
-    print(f"💬 KEYWORDS: {len(TALKATIVE_MAP)} | JOKES: {len(JOKES)}", flush=True)
+    print(f"💬 KEYWORDS: {len(TALKATIVE_MAP)} | PHRASES: {len(TALKATIVE_PHRASES)} | JOKES: {len(JOKES)}", flush=True)
     try: asyncio.create_task(cleanup_task())
     except: pass
     try: asyncio.create_task(group_cleanup_task())
