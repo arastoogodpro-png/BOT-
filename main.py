@@ -63,6 +63,28 @@ RED = "🔴"
 YELLOW = "🟡"
 
 
+# ================== 🔄 Two-Word Flexible Command Matcher ==================
+ON_WORDS = {"باز", "روشن", "فعال", "بازکردن", "بازکن", "on", "enable", "روشن‌کن", "بازش"}
+OFF_WORDS = {"بسته", "خاموش", "غیرفعال", "قفل", "بستن", "ببند", "off", "disable", "خاموش‌کن", "قفلش"}
+
+
+def match_two_word_cmd(text, word):
+    """چک می‌کنه 'کلمه + فعل' یا 'فعل + کلمه' - برمی‌گردونه True (روشن) / False (خاموش) / None"""
+    if not text:
+        return None
+    parts = text.strip().split()
+    if len(parts) != 2:
+        return None
+    a, b = parts[0].strip(), parts[1].strip()
+    if a == word:
+        if b in ON_WORDS: return True
+        if b in OFF_WORDS: return False
+    if b == word:
+        if a in ON_WORDS: return True
+        if a in OFF_WORDS: return False
+    return None
+
+
 # ================== 🎨 FONT SYSTEM ==================
 def _has_persian(text):
     return bool(re.search(r'[\u0600-\u06FF]', text or ""))
@@ -86,52 +108,26 @@ def _map_unicode(text, upper_start, lower_start, digit_start=None):
     return ''.join(out)
 
 
-def font_bold(t):
-    return _map_unicode(t, 0x1D400, 0x1D41A, 0x1D7CE)
-
-
+def font_bold(t): return _map_unicode(t, 0x1D400, 0x1D41A, 0x1D7CE)
 def font_italic(t):
     r = _map_unicode(t, 0x1D434, 0x1D44E)
     return r.replace(chr(0x1D455), "ℎ")
-
-
-def font_bold_italic(t):
-    return _map_unicode(t, 0x1D468, 0x1D482)
-
-
-def font_bold_script(t):
-    return _map_unicode(t, 0x1D4D0, 0x1D4EA)
-
-
-def font_bold_fraktur(t):
-    return _map_unicode(t, 0x1D56C, 0x1D586)
-
-
-def font_sans(t):
-    return _map_unicode(t, 0x1D5A0, 0x1D5BA, 0x1D7E2)
-
-
-def font_sans_bold(t):
-    return _map_unicode(t, 0x1D5D4, 0x1D5EE, 0x1D7EC)
-
-
-def font_mono(t):
-    return _map_unicode(t, 0x1D670, 0x1D68A, 0x1D7F6)
+def font_bold_italic(t): return _map_unicode(t, 0x1D468, 0x1D482)
+def font_bold_script(t): return _map_unicode(t, 0x1D4D0, 0x1D4EA)
+def font_bold_fraktur(t): return _map_unicode(t, 0x1D56C, 0x1D586)
+def font_sans(t): return _map_unicode(t, 0x1D5A0, 0x1D5BA, 0x1D7E2)
+def font_sans_bold(t): return _map_unicode(t, 0x1D5D4, 0x1D5EE, 0x1D7EC)
+def font_mono(t): return _map_unicode(t, 0x1D670, 0x1D68A, 0x1D7F6)
 
 
 def font_fullwidth(t):
     out = []
     for ch in t:
-        if 'A' <= ch <= 'Z':
-            out.append(chr(0xFF21 + ord(ch) - ord('A')))
-        elif 'a' <= ch <= 'z':
-            out.append(chr(0xFF41 + ord(ch) - ord('a')))
-        elif '0' <= ch <= '9':
-            out.append(chr(0xFF10 + ord(ch) - ord('0')))
-        elif ch == ' ':
-            out.append('\u3000')
-        else:
-            out.append(ch)
+        if 'A' <= ch <= 'Z': out.append(chr(0xFF21 + ord(ch) - ord('A')))
+        elif 'a' <= ch <= 'z': out.append(chr(0xFF41 + ord(ch) - ord('a')))
+        elif '0' <= ch <= '9': out.append(chr(0xFF10 + ord(ch) - ord('0')))
+        elif ch == ' ': out.append('\u3000')
+        else: out.append(ch)
     return ''.join(out)
 
 
@@ -147,46 +143,21 @@ SMALL_CAPS_MAP = {
 }
 
 
-def font_small_caps(t):
-    return ''.join(SMALL_CAPS_MAP.get(ch, ch) for ch in t)
-
-
-def deco_strike(t):
-    return ''.join(ch + '\u0336' for ch in t)
-
-
-def deco_underline(t):
-    return ''.join(ch + '\u0332' for ch in t)
-
-
-def deco_overline(t):
-    return ''.join(ch + '\u0305' for ch in t)
-
-
-def deco_double_under(t):
-    return ''.join(ch + '\u0333' for ch in t)
-
-
-def deco_slash(t):
-    return ''.join(ch + '\u0338' for ch in t)
-
-
-def deco_dot_above(t):
-    return ''.join(ch + '\u0307' for ch in t)
+def font_small_caps(t): return ''.join(SMALL_CAPS_MAP.get(ch, ch) for ch in t)
+def deco_strike(t): return ''.join(ch + '\u0336' for ch in t)
+def deco_underline(t): return ''.join(ch + '\u0332' for ch in t)
+def deco_overline(t): return ''.join(ch + '\u0305' for ch in t)
+def deco_double_under(t): return ''.join(ch + '\u0333' for ch in t)
+def deco_slash(t): return ''.join(ch + '\u0338' for ch in t)
+def deco_dot_above(t): return ''.join(ch + '\u0307' for ch in t)
 
 
 def build_font_message(text):
     text = text.strip()
-    if not text:
-        return None
-    if len(text) > 30:
-        text = text[:30] + "…"
-    
-    has_fa = _has_persian(text)
+    if not text: return None
+    if len(text) > 30: text = text[:30] + "…"
     has_en = _has_latin(text)
-    
     sections = []
-    
     if has_en:
         sections.append(("🇬🇧 **استایل‌های انگلیسی:**", [
             ("1️⃣ بولد", font_bold(text)),
@@ -200,7 +171,6 @@ def build_font_message(text):
             ("9️⃣ پهن", font_fullwidth(text)),
             ("🔟 کوچک", font_small_caps(text)),
         ]))
-    
     sections.append(("✨ **استایل‌های تزئینی:**", [
         ("✏️ خط‌خورده", deco_strike(text)),
         ("✏️ زیرخط", deco_underline(text)),
@@ -217,7 +187,6 @@ def build_font_message(text):
         ("•° کلاسیک °•", f"•°¯`•• {text} ••´¯°•"),
         ("▁▂▃ خط پایین ▃▂▁", f"▁▂▃ {text} ▃▂▁"),
     ]))
-    
     lines = [
         "╭─━━━━━━━━━━━━━━━━━━━─╮",
         "   🎨 **فونت‌ساز FLUXBOT** 🎨",
@@ -227,7 +196,6 @@ def build_font_message(text):
         "━━━━━━━━━━━━━━━━━━━",
         "",
     ]
-    
     for title, items in sections:
         lines.append(title)
         lines.append("")
@@ -237,11 +205,9 @@ def build_font_message(text):
             lines.append("")
         lines.append("━━━━━━━━━━━━━━━━━━━")
         lines.append("")
-    
     lines.append("💡 **روی هر خط، نگه دار و کپی کن!**")
     lines.append("")
     lines.append("⚡ **FLUXBOT**")
-    
     return "\n".join(lines)
 
 
@@ -282,7 +248,6 @@ CHALLENGE_POLLS = [
 
 def build_challenge_message():
     mode = random.choice(["text", "text", "poll"])
-    
     if mode == "text":
         challenge = random.choice(CHALLENGE_TEXTS)
         return (
@@ -309,6 +274,103 @@ def build_challenge_message():
         )
 
 
+# ================== 💬 TALKATIVE (سخنگو) ==================
+TALKATIVE_PHRASES = [
+    "جونم؟ 🥰", "جانم؟ 💖", "جانم عزیزم 💕", "جانم به قربانت 🌹", "جانان 💝",
+    "قربونت 🌷", "فدات 💗", "عزیزم 🌸", "گلم 🌺", "نازنینم 💞",
+    "عشقم 💖", "قلبم 💓", "جیگرم 🔥", "دلم 💗", "دلبرم 💐",
+    "نفسم 😍", "روحم 🕊️", "زندگیم 💫", "همه چیزم 💖", "قشنگم 🌟",
+    "خوشگلم 💕", "زیبای من 🌹", "ماه من 🌙", "خورشیدم ☀️", "ستاره‌م ⭐",
+    "قمر 🌸", "پری 🌺", "فرشته 💫", "بوس بفرست 😘", "بوست کنم 🤗",
+    "بله؟ 🤗", "چی شد؟ 😊", "چیه؟ 😁", "ها؟ 😅", "چی شده؟ 🤔",
+    "چی میگی؟ 😊", "چی می‌خوای؟ 😄", "چی می‌خواستی؟ 🤗", "چی کارم داری؟ 😄", "چی به چیه؟ 🤨",
+    "چیشده؟ 😯", "خب بگو 🤔", "بگو ببینم 👀", "بگو دیگه 😊", "چیه دیگه؟ 😜",
+    "آره؟ 😐", "جدی؟ 😲", "راست میگی؟ 😳", "واقعا؟ 😮", "اینطور؟ 🤔",
+    "در خدمتم 🌹", "درخدمتم 💐", "بفرمایید 🌸", "امر بفرمایید 🙋", "امر کن 🎩",
+    "به روی چشم 👁️", "چشم 🫡", "دستور بده 👑", "دستورت چیه؟ ⚡", "در خدمتیم 🌟",
+    "چاکرم 💫", "سراپا گوش 🎧", "حاضرم 🎯", "منتظرم ✨", "خدمت شما 📞",
+    "بفرما 🌺", "بفرمایید بگید 🌹", "بگو جانم 💐", "بله جانم 🌷", "بله بفرمایید 🌺",
+    "بله عزیزم 💕", "با من کاری داشتی؟ 🤗", "بگو 😌", "من اینجام 💫", "غلام شما 🙇",
+    "گوش می‌دم 👂", "خب؟ 😏", "بعد؟ 🤨", "دیگه چی؟ 😆", "هستی؟ 🤔",
+    "بازم؟ 😄", "ادامه بده 🎬", "برو جلو 🚀", "چشام به دهنت 😯", "گوش گوش 🎧",
+    "چی میگی تو؟ 😂", "داری چرت میگی؟ 🤪", "حوصله داری؟ 😴", "برو بابا 😂", "خب که چی؟ 🙄",
+    "به من چه؟ 🤷", "نکن اینکارو 🙅", "بیخیال 🚶", "بسه دیگه ✋", "جانم بگو 🌹",
+    "بگو ببینم چخبر؟ 📰", "چه خبر؟ 📢", "خبری هست؟ 📰", "بله بله؟ 🤭", "ها چی شده؟ 😯",
+    "چی شده یهو؟ 😱", "چیه، ترسیدم 🫣", "بگو تا کی منتظر باشم؟ ⏰", "شرمنده نکن منو 🙈", "چیزی گفتید؟ 👂",
+    "منو صدا زدی؟ 📢", "بله؟ بنده؟ 🙋", "قربان؟ 🎩", "بله قربان 🎖️", "اینجام 🙋",
+    "سلام؟ 👋", "چیه سلام کردی؟ 😊", "چی میگی عزیز؟ 💐", "بگو ببینم چی داری؟ 🎁", "دستت درد نکنه، بگو 🌹",
+    "من خدام 🫡", "به من میگی؟ 🤗", "بله چیه بفرمایید؟ 🌸", "من چاکرتم 💫", "چیزی لازم داری؟ 🤝",
+    "کمک بخوای؟ 🆘", "کمکی هست؟ 💪", "چیکار می‌کنی؟ 🎬", "چطوری؟ 😊", "خوبی؟ 💚",
+    "سلامتی؟ 🌿", "چیه مگه؟ 🤨", "کی بودی؟ 🕵️", "چی میخواستی آخه؟ 🤔", "جانم عزیز دل 💖",
+    "بیا جلو ببینم 👀", "بگو ببینم چی شد؟ 📝", "چی خبر؟ 📻", "چیه یهو یادم افتادی؟ 💭", "بگو بشنوم 🎧",
+    "یه لحظه؟ ⏳", "بله، چیزی شده؟ ❓", "بگو دیگه، زود باش ⚡", "چیه یادت افتاد؟ 💡", "صدات کردم که؟ 📞",
+    "چیه به چه کارم داری؟ 😄", "چیکارم داری؟ 🤨", "چی میخوای از جونم؟ 😂", "بگو ببینم چیکارم داری؟ 🤗", "درود بر تو 🌟",
+    "سلام بر تو 🌸", "علیک سلام 🌹", "چیه سلام منو خوردی؟ 😄", "من گوش میدم، تو بگو 👂", "با ادب حرف بزن 😌",
+    "چی گفتی؟ 🤔", "نشنیدم، دوباره بگو 👂", "بلندتر بگو 📢", "چیزی گفتی؟ 🎤", "در خدمت شما 🌷",
+    "من اینجام خدمتت 🌹", "چشم و دل 🫀", "دست به کارم 🤝", "بیا اینجا ببینم 🚶", "بگو کی هستی؟ 🕵️",
+    "چیه بگو؟ 😊", "چی میگی تو؟ 😅", "جانم؟ بگو 🌹", "چیه مثل برق اومدی؟ ⚡", "چیزی هست؟ 🤔",
+    "بگید ببینم 👂", "من آماده‌ام ✅", "چشم، حالا بگو ✨", "بفرمایید سرکار 🌺", "بنده در خدمتم 🙋",
+    "چی میخوای؟ بگو دیگه 😊", "بگو ببینم چیشده؟ 🤔", "چیه داری بهم نگاه می‌کنی؟ 👀", "بگو چیت هست؟ 📝", "بفرمایید، بنده گوشم 👂",
+    "چیه صدایم زدی؟ 📢", "چیشد یهو؟ ⏰", "بگو من اینجام 🌹", "قربونت برم، چی میگی؟ 💕", "بیا حرف بزنیم 🗣️",
+    "چیه میخوای بگی؟ 💬", "بگو ببینم چه مرگت شده؟ 😂", "بیا تو بگو ✨", "چی میخوای بگی؟ 🤔", "بگو دیگه خب 😊",
+    "بله بله، بگو 😄", "تو بگو من گوشم 🎧", "چی داری؟ بریز وسط 🎤", "بیا وسط میدون 🏟️", "چی گفتی؟ چاکرم 🫡",
+    "بله سرورم 🎖️", "دستور شما اجرا میشه ✅", "چشم ارباب 👑", "درخدمتم قربان 🫡", "بگو ببینم چیکار داری؟ 🤔",
+    "ای جانم 💕", "ای دل غافل 🥰", "چی شده رفیق؟ 🤝", "بگو بشینم گوش بدم 🪑", "چی میگی همشهری؟ 🏘️",
+    "بیا پایین ببینم 🤔", "چی شده داداش؟ 😎", "چی میگی رفیق؟ 🤜", "بگو ببینم قضیه چیه؟ 🔍", "چیه یکم آروم باش 😌",
+    "عسل 🍯", "شکلات 🍫", "قند 🍬", "شکرم 🍬", "قند و نبات 🍭",
+    "یه لحظه نگاه کن 😊", "چشم‌های قشنگت رو ببینم 😍", "صدات گرم 🌟", "ای جان 😍", "وای چقدر قشنگ 💕",
+    "جونم؟ باز چی میخوای؟ 😏", "باز تو؟ 😄", "چیه دست از سر من برنمی‌داری؟ 😂", "بگو ببینم چیکار داری باز؟ 🤪", "چیشده اینبار؟ 😆",
+    "هزار بار گفتم، بگو 😤", "بازم؟ جدی؟ 😵", "نه بابا تو دیگه کی هستی؟ 😂", "شرمنده نکن 😅", "خب دیگه چیه؟ 🙄",
+    "فلکس بات در خدمته 💫", "به به چه عجب 🤗", "بله بنده؟ 🙋", "چی می‌خوای از این زبون بسته؟ 🥺", "بگو، مگه دست خودمه؟ 😂",
+    "من یه رباتم، تو یه انسان، ولی باز دوستیم 💚", "چیه باز تنهام گذاشتی؟ 🥺", "بگو ببینم چی توی دلت هست 💭", "هی، سلام 😊", "چی شده عزیز؟ 💐",
+    "بله چیه؟ 🤔", "چه کردی؟ 🤨", "چی میگی رفیق؟ 😊", "چی می‌خواستی؟ 🤗", "چطور می‌تونم کمکت کنم؟ 💪",
+    "چی میخوای عزیز؟ 🌸", "چی لازم داری؟ 🎁", "چی میگی گلم؟ 🌹", "چی میگی جانم؟ 💖", "چی میگی عشقم؟ 💕",
+    "بیا بغل 🤗", "بوست کنم 🥰", "دوستت دارم 💖", "عاشقتم 💕", "قلبم برات میزنه 💓",
+    "یه بوس چسبیده 😘", "بغلم کن 🤗", "بوس بفرست 🌹", "بغل به بغل 💐", "قربونت برم 💗",
+    "ای بابا باز تو؟ 😂", "نه بابا، باز تو اومدی؟ 🤪", "چیه یهو؟ 😯", "بازم شروع شد؟ 🤦", "خب دیگه چی؟ 😅",
+    "اه اومدی؟ 😏", "چیه اینبار؟ 🙄", "باز چی شده آخه؟ 😩", "بگو ببینم چخبر؟ 📰", "خب؟ ادامه بده 🎬",
+    "خبری هست؟ 📻", "چی خبر؟ 📰", "شنیدم صدات کردم 📞", "چی شده دوباره؟ 😅", "بازم دردسر؟ 😂",
+    "بله بنده در خدمتم 🌟", "بگو تا خسته شم 😊", "بگو من چاکرم 🤝", "بگو حرف بزن 🎤", "بگو بشینم گوش کنم 🪑",
+    "تو چطوری؟ 😊", "خوبی تو؟ 💚", "چخبر از خودت؟ 📰", "چی کار می‌کنی؟ 🎬", "سلامتی تو؟ 🌿",
+    "بله مدیر؟ 🎩", "بله رئیس؟ 👔", "بله سرکار؟ 🌺", "بله بانو؟ 🌹", "بله آقا؟ 🎩",
+    "صدای قشنگت 🌟", "کلامت زیبا 💕", "حرفت متین 🌹", "بیانت عالیه ✨", "چقدر قشنگ حرف می‌زنی 💐",
+    "چی به من میگی؟ 😏", "باز چی میخوای از این بیچاره؟ 😂", "نه بابا اینم شد کار؟ 🤣", "بنده چاکرم فقط 😌", "چشم تا خود صبح 🫡",
+    "چی؟ 🤔", "بله؟ 🤗", "خب؟ 😏", "بعد؟ 🤨", "بازم؟ 😄", "چیه؟ 😊", "چشه؟ 🤔", "ها؟ 😅",
+    "بفرمایید 🌺", "بفرما 🌹", "درخدمتم 💫", "چاکرم 🎩", "غلام شما 🙇", "خدمتگزار شما 💐", "بنده حقیر 🫡",
+]
+
+
+TALKATIVE_TRIGGERS_RE = re.compile(
+    r"^(?:فلاکس|فلکس|فلوکس|فلکسی)\s*بات|^flux\s*bot",
+    re.IGNORECASE
+)
+
+
+def get_random_talkative():
+    return random.choice(TALKATIVE_PHRASES)
+
+
+def is_talkative_enabled(chat_id):
+    disabled = bot_data.get("talkative_disabled", [])
+    if not isinstance(disabled, list):
+        disabled = []
+        bot_data["talkative_disabled"] = disabled
+    return chat_id not in disabled
+
+
+def set_talkative(chat_id, enabled):
+    if "talkative_disabled" not in bot_data:
+        bot_data["talkative_disabled"] = []
+    if not isinstance(bot_data["talkative_disabled"], list):
+        bot_data["talkative_disabled"] = []
+    disabled = bot_data["talkative_disabled"]
+    if enabled:
+        if chat_id in disabled: disabled.remove(chat_id)
+    else:
+        if chat_id not in disabled: disabled.append(chat_id)
+    save_data(bot_data, force=True)
+
+
 # ================== Group Validation ==================
 def is_dead_group_error(err_str):
     if not err_str: return False
@@ -332,12 +394,10 @@ def is_dead_group_error(err_str):
 
 
 async def validate_group(gid):
-    if not gid:
-        return False, "شناسه خالی"
+    if not gid: return False, "شناسه خالی"
     try:
         info = await bot.get_chat_info(gid)
-        if not info:
-            return False, "پاسخ خالی از سرور"
+        if not info: return False, "پاسخ خالی از سرور"
         data = info.get("data", info) if isinstance(info, dict) else info
         if isinstance(data, dict):
             status = str(data.get("status", "")).lower()
@@ -350,8 +410,7 @@ async def validate_group(gid):
         return True, None
     except Exception as e:
         err = str(e)
-        if is_dead_group_error(err):
-            return False, err
+        if is_dead_group_error(err): return False, err
         return True, err
 
 
@@ -533,15 +592,55 @@ async def get_user_info(chat_id, user_id, force=False):
         mi = await bot.get_chat_member(chat_id, user_id)
         if mi:
             data = mi.get("data", mi) if isinstance(mi, dict) else mi
-            cm = data.get("chat_member", data) if isinstance(data, dict) else {}
-            info["name"] = cm.get("first_name") or cm.get("name") or cm.get("title")
-            un = cm.get("username") or cm.get("user_name")
+            cm = {}
+            if isinstance(data, dict):
+                cm = data.get("chat_member") or data.get("member") or data
+            if not isinstance(cm, dict):
+                cm = {}
+
+            info["name"] = (
+                cm.get("first_name") or cm.get("firstName") or
+                cm.get("name") or cm.get("title") or
+                cm.get("display_name")
+            )
+            un = cm.get("username") or cm.get("user_name") or cm.get("userName")
             if un: info["username"] = str(un).lstrip("@")
-            st = str(cm.get("status", "")).strip().lower()
-            if st in ("creator", "owner"): info["role"] = "مالک"
-            elif st in ("admin", "administrator"): info["role"] = "ادمین"
+
+            status_raw = (
+                cm.get("status") or cm.get("member_type") or cm.get("memberType") or
+                cm.get("role") or cm.get("type") or cm.get("chat_member_type") or
+                cm.get("membership") or ""
+            )
+            if not status_raw and isinstance(data, dict):
+                status_raw = data.get("status") or data.get("member_type") or ""
+
+            st = str(status_raw or "").strip().lower().replace("_", "").replace("-", "").replace(" ", "")
+
+            role = "عضو"
+            if st in ("creator", "owner", "admincreator", "ownercreator", "superadmin", "chatcreator"):
+                role = "مالک"
+            elif st in ("admin", "administrator", "moderator", "mod", "chatadmin", "channeladmin"):
+                role = "ادمین"
+            elif st in ("member", "user", "participant", "regular", "normal", "ordinary"):
+                role = "عضو"
+
+            if role == "عضو":
+                if cm.get("is_creator") or cm.get("isCreator") or cm.get("is_owner") or cm.get("isOwner"):
+                    role = "مالک"
+                elif cm.get("is_admin") or cm.get("isAdmin") or cm.get("is_administrator") or cm.get("isAdministrator"):
+                    role = "ادمین"
+
+            perms = cm.get("permissions") or cm.get("rights") or {}
+            if isinstance(perms, dict) and role == "عضو":
+                if perms.get("is_creator") or perms.get("is_owner"):
+                    role = "مالک"
+                elif perms.get("is_admin"):
+                    role = "ادمین"
+
+            info["role"] = role
+
             username_cache[key] = info
-            username_cache_ttl[key] = now + 3600
+            username_cache_ttl[key] = now + 600
             save_known_user(user_id, info.get("name"), info.get("username"))
             save_data(bot_data)
     except Exception as e:
@@ -580,8 +679,7 @@ def format_user_display(ui, uid):
 
 
 async def get_bot_id():
-    if BOT_ID_CACHE["id"]:
-        return BOT_ID_CACHE["id"]
+    if BOT_ID_CACHE["id"]: return BOT_ID_CACHE["id"]
     try:
         me = await bot.get_me()
         if me:
@@ -603,8 +701,8 @@ async def get_bot_id():
 def extract_reply_info(message):
     result = {"reply_id": None, "sender_id": None}
     try:
-        rt = (getattr(message, 'reply_to_message', None) or 
-              getattr(message, 'reply_message', None) or 
+        rt = (getattr(message, 'reply_to_message', None) or
+              getattr(message, 'reply_message', None) or
               getattr(message, 'reply_to', None))
         if rt:
             if hasattr(rt, 'message_id'): result["reply_id"] = str(rt.message_id)
@@ -767,20 +865,14 @@ def get_top_inviters(limit=10):
 def parse_slow_duration(text):
     text = text.strip()
     m = re.match(r'^(\d+)\s*(ثانیه|دقیقه|ساعت|روز|s|m|h|d)?$', text)
-    if not m:
-        return None
+    if not m: return None
     num = int(m.group(1))
     unit = (m.group(2) or "ثانیه").lower()
-    if unit in ("ثانیه", "s", ""):
-        sec = num
-    elif unit in ("دقیقه", "m"):
-        sec = num * 60
-    elif unit in ("ساعت", "h"):
-        sec = num * 3600
-    elif unit in ("روز", "d"):
-        sec = num * 86400
-    else:
-        sec = num
+    if unit in ("ثانیه", "s", ""): sec = num
+    elif unit in ("دقیقه", "m"): sec = num * 60
+    elif unit in ("ساعت", "h"): sec = num * 3600
+    elif unit in ("روز", "d"): sec = num * 86400
+    else: sec = num
     if sec < 5: sec = 5
     if sec > 86400: sec = 86400
     return sec
@@ -929,7 +1021,7 @@ async def get_chat_join_link(chat_id):
             if isinstance(data, dict):
                 chat = data.get("chat", data)
                 if isinstance(chat, dict):
-                    link = (chat.get("join_link") or chat.get("invite_link") or 
+                    link = (chat.get("join_link") or chat.get("invite_link") or
                            chat.get("link") or chat.get("join_url") or chat.get("invite_url"))
                     if link: return str(link)
                     un = chat.get("username")
@@ -944,7 +1036,6 @@ async def get_group_list_text():
     groups = ensure_list(bot_data.get("known_groups", []))
     if not groups:
         return "📋 **لیست گروه‌ها**\n\n📭 ربات هنوز توی هیچ گروهی نیست.\n\n⚡ **FLUXBOT**"
-    
     live_groups = []
     dead_groups = []
     now = time.time()
@@ -961,17 +1052,14 @@ async def get_group_list_text():
             dead_groups.append(gid)
             print(f"🗑️ گروه مرده حذف شد: {gid} | {_err}", flush=True)
         await asyncio.sleep(0.15)
-    
     if dead_groups:
         bot_data["known_groups"] = live_groups
         save_data(bot_data, force=True)
         for gid in dead_groups:
             group_info_cache.pop(gid, None)
             group_info_cache_ttl.pop(gid, None)
-    
     if not live_groups:
         return "📋 **لیست گروه‌ها**\n\n📭 هیچ گروه فعالی وجود نداره.\n\n⚡ **FLUXBOT**"
-    
     text = (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
         "   ⚡ **FLUXBOT** ⚡\n"
@@ -1033,149 +1121,109 @@ def get_features_text():
         "   📖 قابلیت‌های کامل\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
+        "💬 **سخنگو**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📌 `فلکس بات` → جواب رندوم\n"
+        "├ 🌟 پیش‌فرض: فعال\n"
+        "├ 🟢 `سخنگو باز` / `باز سخنگو`\n"
+        "├ 🔴 `سخنگو بسته` / `بسته سخنگو`\n"
+        "└ 💡 فقط در گروه\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "🎨 **فونت‌ساز**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📝 دستور: `فونت [متن]`\n"
-        "├ 📝 یا: `فوت [متن]`\n"
-        "├ 🌍 پشتیبانی از **فارسی** و **انگلیسی**\n"
-        "├ 🎨 بالای ۱۰ استایل مختلف\n"
-        "├ ✿ استایل‌های تزئینی (گل، ستاره، قاب و...)\n"
-        "└ 💡 فقط در گروه کار می‌کنه\n\n"
+        "├ 📝 `فونت [متن]` یا `فوت [متن]`\n"
+        "├ 🌍 فارسی و انگلیسی\n"
+        "└ 💡 فقط در گروه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🎯 **چالش روزانه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📌 دستور: `چالش`\n"
-        "├ 🎲 چالش تصادفی (متنی یا نظرسنجی)\n"
-        "├ 💬 چالش‌های جذاب و سرگرم‌کننده\n"
-        "├ 📊 نظرسنجی‌های شاد و باحال\n"
-        "└ 💡 فقط در گروه کار می‌کنه\n\n"
+        "├ 📌 `چالش`\n"
+        "├ 🎲 چالش تصادفی (متنی/نظرسنجی)\n"
+        "└ 💡 فقط در گروه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🛡️ **امنیت و مدیریت گروه**\n"
+        "🛡️ **قفل‌ها (هر دو ترتیب کار می‌کنه!)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 🔗 قفل لینک (حذف خودکار لینک)\n"
-        "├ 🆔 قفل آیدی (حذف @username)\n"
-        "├ 📢 قفل اسپم (ضد اسپم هوشمند)\n"
-        "├ 🔗 قفل هایپرلینک (لینک مخفی)\n"
-        "├ 🤬 قفل فحش (۱۰۰+ کلمه)\n"
-        "├ 📨 قفل فوروارد\n"
-        "├ 🎞️ قفل گیف\n"
-        "├ 👋 قفل خوش‌آمدگویی\n"
-        "├ 🔒 قفل گروه دستی\n"
-        "├ ⏱️ قفل موقت (به ساعت)\n"
-        "├ ⏰ قفل زمان‌بندی (روزانه)\n"
-        "├ 🔁 ضد تکرار هوشمند (پیام‌های یکسان)\n"
-        "└ 🐌 حالت آهسته (۵ ثانیه تا ۱ روز)\n\n"
+        "├ 🔗 لینک (باز/بسته)\n"
+        "├ 🆔 آیدی (باز/بسته)\n"
+        "├ 📢 اسپم (باز/بسته)\n"
+        "├ 🔗 هایپرلینک (باز/بسته)\n"
+        "├ 🤬 فحش (باز/بسته)\n"
+        "├ 📨 فوروارد (باز/بسته)\n"
+        "├ 🎞️ گیف (باز/بسته)\n"
+        "├ 👋 خوش‌آمدگویی (باز/بسته)\n"
+        "└ 💬 سخنگو (باز/بسته)\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🔒 **قفل گروه**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `قفل گروه` / `باز`\n"
+        "├ `قفل [ساعت]` → موقت\n"
+        "├ `قفل 08:00 22:00` → زمان‌بندی\n"
+        "└ `لیست قفل گروه`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ **سیستم اخطار**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `اخطار` (ریپلای)\n"
+        "├ `تنظیم اخطار [عدد]`\n"
+        "├ `حذف اخطار` / `حذف اخطار [عدد]`\n"
+        "└ `حذف پیام اخطار [ثانیه]`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "👑 **مدیریت کاربران**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ ⚠️ سیستم اخطار هوشمند\n"
-        "├ 🚫 اخراج خودکار بعد از اخطار\n"
-        "├ ❌ حذف اخطار (کل یا عددی)\n"
-        "├ 🔇 سکوت با زمان دلخواه\n"
-        "├ ⭐ ویژه کردن کاربران\n"
-        "├ ❌ حذف از لیست ویژه\n"
-        "├ 👤 نمایش مقام واقعی\n"
-        "├ 🚫 دستور بن/سیک/اخراج\n"
-        "└ ✅ دستور آنبن\n\n"
+        "├ `بن` / `سیک` / `اخراج` (ریپلای)\n"
+        "├ `انبن` (ریپلای)\n"
+        "├ `سکوت [دقیقه]` (ریپلای)\n"
+        "├ `ویژه` / `حذف ویژه` (ریپلای)\n"
+        "└ `مقام`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "📜 **قوانین گروه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📝 تنظیم قوانین با دستور\n"
-        "├ 📋 نمایش قوانین به همه\n"
-        "└ ❌ حذف قوانین\n\n"
+        "├ `تنظیم قوانین [متن]`\n"
+        "├ `قوانین` → نمایش\n"
+        "└ `حذف قوانین`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🔁 **ضد تکرار و آهسته**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ `تنظیم ضد تکرار [۲-۱۰]`\n"
+        "├ `ضد تکرار بسته`\n"
+        "├ `تنظیم حالت آهسته [زمان]`\n"
+        "└ `حالت آهسته بسته`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🎮 **بازی و سرگرمی**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 🎲 بازی دوز چهارتایی (دو نفره)\n"
-        "├ 🪙 بازی شیر یا خط (شانسی)\n"
-        "├ 🎯 چالش روزانه\n"
-        "├ 😂 جک و جوک\n"
-        "├ 📜 ضرب‌المثل\n"
-        "├ 💡 دانستی\n"
-        "├ 🧠 فکت علمی\n"
-        "├ 💚 پند و اندرز (پ ن پ)\n"
-        "├ 📝 شعر\n"
-        "├ 🔮 فال حافظ\n"
-        "└ 🍀 شانس امروز\n\n"
+        "├ 🎲 `دوز` / `دوز قرمز` / `دوز زرد`\n"
+        "├ 🪙 `بازی شیر یا خط`\n"
+        "├ 🎯 `چالش`\n"
+        "├ 😂 `جک` / 📜 `ضرب المثل`\n"
+        "├ 💡 `دانستی` / 🧠 `فکت`\n"
+        "├ 💚 `پ ن پ` / 📝 `شعر`\n"
+        "└ 🔮 `فال` / 🍀 `شانس`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "📊 **پروفایل و آمار**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 🐺 تنظیم اصل اختصاصی\n"
-        "├ 🎭 تنظیم لقب اختصاصی\n"
-        "├ 📈 آمار پیام روزانه\n"
-        "├ 📅 تاریخ پیوست به گروه\n"
-        "├ 🏆 برترین‌های روز (تاپ ۱۰)\n"
-        "├ 💎 نمایش امتیاز\n"
-        "├ ⏰ ساعت و تاریخ زنده\n"
-        "└ 👤 پروفایل کامل کاربران\n\n"
+        "├ 📊 `پروفایل`\n"
+        "├ 🏆 `تاپ`\n"
+        "├ ⏰ `ساعت`\n"
+        "├ 🐺 `تنظیم اصل [نام]`\n"
+        "└ 🎭 `تنظیم لقب [نام]`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎟️ **سیستم دعوت دوستان**\n"
+        "🎟️ **دعوت دوستان**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 🎫 کد دعوت ۶ رقمی اختصاصی\n"
-        "├ 🎟️ سیستم ثبت کد دعوت\n"
-        "├ ⭐ امتیاز به ازای هر دعوت\n"
-        "├ 🏆 جدول برترین دعوت‌کنندگان\n"
-        "└ 💎 امتیاز دو طرف\n\n"
+        "├ 🎫 کد دعوت ۶ رقمی\n"
+        "├ ⭐ امتیاز دو طرف\n"
+        "└ 🏆 لیست برتر\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚙️ **ابزارهای مدیریتی**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 🗑️ حذف فوری پیام\n"
-        "├ ⏱️ حذف با تایمر (به دقیقه)\n"
-        "├ 🧹 پاکسازی انبوه پیام‌ها\n"
-        "├ 🚫 فیلتر کلمات (۵۰ کلمه)\n"
-        "├ ❌ حذف از لیست فیلتر\n"
-        "├ 📋 لیست کلمات فیلترشده\n"
-        "└ 📚 راهنمای کامل\n\n"
+        "├ 🗑️ `حذف` / `حذف [دقیقه]`\n"
+        "├ 🧹 `پاکسازی [عدد]`\n"
+        "├ 🚫 `فیلتر [کلمه]`\n"
+        "├ 📋 `لیست فیلتر`\n"
+        "└ 📚 `راهنما`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "👤 **دستورات کاربران**\n"
+        "👑 **فقط مالک ربات**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ `مقام` → مقام شما\n"
-        "├ `پروفایل` یا `آمار` → پروفایل\n"
-        "├ `تاپ` → برترین‌های گروه\n"
-        "├ `ساعت` → ساعت و تاریخ\n"
-        "├ `قوانین` → نمایش قوانین\n"
-        "├ `تنظیم اصل [نام]`\n"
-        "├ `تنظیم لقب [نام]`\n"
-        "├ `فونت [متن]` → فونت‌ساز 🎨\n"
-        "├ `چالش` → چالش روزانه 🎯\n"
-        "├ `جک` / `ضرب المثل`\n"
-        "├ `دانستی` / `فکت`\n"
-        "├ `پ ن پ` / `شعر`\n"
-        "├ `فال` / `شانس`\n"
-        "└ `راهنما` → راهنمای کامل\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "👑 **دستورات مالک / ویژه**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "├ `فعال` / `غیرفعال`\n"
-        "├ `بن` / `سیک` / `اخراج`\n"
-        "├ `انبن` / `آنبن`\n"
-        "├ `سکوت [دقیقه]`\n"
-        "├ `اخطار` / `حذف اخطار`\n"
-        "├ `تنظیم اخطار [عدد]`\n"
-        "├ `تنظیم پیام خوش آمدگویی [متن]`\n"
-        "├ `تنظیم قوانین [متن]`\n"
-        "├ `تنظیم ضد تکرار [۲ تا ۱۰]`\n"
-        "├ `ضد تکرار بسته`\n"
-        "├ `تنظیم حالت آهسته [زمان]`\n"
-        "├ `حالت آهسته بسته`\n"
-        "├ `ویژه` / `حذف ویژه`\n"
-        "├ `فیلتر [کلمه]`\n"
-        "├ `حذف` / `حذف [دقیقه]`\n"
-        "├ `پاکسازی [عدد]` → پاکسازی انبوه\n"
-        "├ `قفل گروه` / `باز`\n"
-        "├ `ارسال پیام همگانی گروه [متن]` 📢\n"
-        "└ `لیست گروه ها` (فقط مالک)\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "✨ **چرا FluxBot؟**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "⚡ سرعت بالا و بدون تاخیر\n"
-        "🎯 مدیریت هوشمند و دقیق\n"
-        "🔐 امنیت کامل گروه شما\n"
-        "💎 رابط کاربری زیبا و مدرن\n"
-        "🚀 به‌روزرسانی مداوم\n"
-        "🎮 سرگرمی بی‌نظیر برای اعضا\n"
-        "📊 گزارش‌گیری دقیق\n"
-        "💾 حفظ کامل اطلاعات\n\n"
+        "├ 📢 `ارسال پیام همگانی گروه [متن]`\n"
+        "└ 📋 `لیست گروه ها`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🔗 **@Flux1bot**\n"
         "📢 **@RPCITY_PHANTOM**\n"
@@ -1229,6 +1277,7 @@ def load_data():
         "rules": {},
         "anti_repeat": {},
         "slow_mode": {},
+        "talkative_disabled": [],
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
@@ -1240,7 +1289,7 @@ def load_data():
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                    for lk in ["started_users", "known_groups"]:
+                    for lk in ["started_users", "known_groups", "talkative_disabled"]:
                         if lk in loaded: loaded[lk] = ensure_list(loaded[lk])
                     for k, v in defaults.items():
                         if k not in loaded: loaded[k] = v
@@ -1292,8 +1341,14 @@ async def cleanup_task():
             for k in expired: del waiting_for_code[k]
             cutoff = now - 30
             keys = [k for k, v in text_dedup.items() if v < cutoff]
-            for k in keys: 
+            for k in keys:
                 if k in text_dedup: del text_dedup[k]
+            # رفرش کش نقش‌ها هر ۵ دقیقه برای دقت
+            role_refresh_counter = bot_data.get("_role_refresh", 0)
+            if now - role_refresh_counter > 300:
+                username_cache.clear()
+                username_cache_ttl.clear()
+                bot_data["_role_refresh"] = now
             expired = [k for k, v in username_cache_ttl.items() if now > v]
             for k in expired:
                 if k in username_cache: del username_cache[k]
@@ -1568,6 +1623,7 @@ def get_help_text():
         "├ 🐺 `تنظیم اصل [نام]`\n├ 🎭 `تنظیم لقب [نام]`\n"
         "├ 🎨 `فونت [متن]` → فونت‌ساز\n"
         "├ 🎯 `چالش` → چالش روزانه\n"
+        "├ 💬 `فلکس بات` → جواب رندوم\n"
         "├ 🎟️ `زدن کد دعوت`\n├ 🎫 `کد دعوت من`\n├ ⭐ `امتیاز من`\n"
         "├ 📖 `قابلیت‌های ربات`\n"
         "├ 🏆 `لیست برتر دعوت‌کنندگان`\n├ 🎮 `لیست بازی`\n"
@@ -1580,6 +1636,15 @@ def get_help_text():
         "├ 🎯 `1` تا `7` → انداختن مهره\n"
         "├ 🪙 `بازی شیر یا خط` → بازی شانسی\n"
         "└ 🚫 `انصراف` → لغو\n\n"
+        "🔓 **قفل‌ها (هر دو ترتیب کار می‌کنه):**\n"
+        "├ `لینک باز` / `باز لینک`\n"
+        "├ `آیدی بسته` / `بسته آیدی`\n"
+        "├ `اسپم فعال` / `فعال اسپم`\n"
+        "├ `فحش خاموش` / `خاموش فحش`\n"
+        "├ `فوروارد قفل` / `قفل فوروارد`\n"
+        "├ `گیف روشن` / `روشن گیف`\n"
+        "├ `سخنگو بسته` / `بسته سخنگو`\n"
+        "└ `هایپرلینک باز` / `باز هایپرلینک`\n\n"
         "👑 **مالک / ویژه:**\n"
         "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
         "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
@@ -1587,19 +1652,14 @@ def get_help_text():
         "├ 🔇 `سکوت [دقیقه]` (ریپلای)\n"
         "├ ⚠️ `اخطار` (ریپلای)\n"
         "├ ❌ `حذف اخطار` (ریپلای)\n"
-        "├ ❌ `حذف اخطار [عدد]` (ریپلای)\n"
         "├ ⚙️ `تنظیم اخطار [عدد]`\n"
         "├ ⏱️ `حذف پیام اخطار [ثانیه]`\n"
         "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
         "├ 🚫 `فیلتر [کلمه]`\n"
         "├ 📋 `لیست فیلتر`\n"
         "├ 📝 `تنظیم قوانین [متن]`\n"
-        "├ 📋 `نمایش قوانین` / ❌ `حذف قوانین`\n"
         "├ 🔁 `تنظیم ضد تکرار [۲-۱۰]`\n"
-        "├ ❌ `ضد تکرار بسته`\n"
         "├ 🐌 `تنظیم حالت آهسته [زمان]`\n"
-        "│   مثال: `5 ثانیه` / `1 دقیقه` / `1 ساعت` / `1 روز`\n"
-        "├ ❌ `حالت آهسته بسته`\n"
         "├ 🧹 `پاکسازی [عدد]` → پاکسازی انبوه\n"
         "├ 📢 `ارسال پیام همگانی گروه [متن]` (فقط مالک)\n"
         "└ 📋 `لیست گروه ها` (توی پیوی)\n\n"
@@ -1706,8 +1766,7 @@ def get_welcome_text(chat_id, chat_name, display_name):
 
 async def bulk_cleanup(chat_id, sender_id, limit):
     c = load_cache()
-    if chat_id not in c:
-        return 0, 0
+    if chat_id not in c: return 0, 0
     msgs = [(mid, sid) for mid, sid in c[chat_id].items() if str(sid) == str(sender_id)]
     msgs.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0, reverse=True)
     deleted = 0
@@ -1724,47 +1783,36 @@ async def bulk_cleanup(chat_id, sender_id, limit):
 
 
 async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
-    if not text:
-        return False
-    
+    if not text: return False
     normalized = normalize_text(text)
-    if not normalized:
-        return False
-    
+    if not normalized: return False
     now = time.time()
-    if chat_id not in repeat_tracker:
-        repeat_tracker[chat_id] = {}
+    if chat_id not in repeat_tracker: repeat_tracker[chat_id] = {}
     if user_id not in repeat_tracker[chat_id]:
         repeat_tracker[chat_id][user_id] = {"text": "", "count": 0, "ids": [], "last_ts": now}
-    
     tracker = repeat_tracker[chat_id][user_id]
-    
     if now - tracker["last_ts"] > 30:
         tracker["text"] = normalized
         tracker["count"] = 1
         tracker["ids"] = [str(msg_id)]
         tracker["last_ts"] = now
         return False
-    
     if tracker["text"] == normalized:
         tracker["count"] += 1
         tracker["ids"].append(str(msg_id))
         tracker["last_ts"] = now
-        
         if tracker["count"] >= limit:
             ids_to_delete = tracker["ids"][:]
             tracker["text"] = ""
             tracker["count"] = 0
             tracker["ids"] = []
             tracker["last_ts"] = now
-            
             for mid in ids_to_delete:
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=mid)
                     await asyncio.sleep(0.2)
                 except Exception as e:
                     print(f"⚠️ repeat delete {mid}: {e}", flush=True)
-            
             try:
                 display = format_user_display(user_info, user_id)
                 if settings.get("warning"):
@@ -1782,14 +1830,12 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
         tracker["count"] = 1
         tracker["ids"] = [str(msg_id)]
         tracker["last_ts"] = now
-    
     return False
 
 
 async def handle_slow_mode(chat_id, user_id, seconds, user_info):
     now = time.time()
-    if chat_id not in slow_tracker:
-        slow_tracker[chat_id] = {}
+    if chat_id not in slow_tracker: slow_tracker[chat_id] = {}
     last = slow_tracker[chat_id].get(user_id, 0)
     if now - last < seconds:
         slow_tracker[chat_id][user_id] = now
@@ -1833,13 +1879,11 @@ async def handle_message(bot, message):
             save_cache(message_cache)
 
         ct = time.time()
-        
         if len(processed_messages) > 1000:
             items = sorted(processed_messages.items(), key=lambda x: x[1])
             keep = dict(items[-500:])
             processed_messages.clear()
             processed_messages.update(keep)
-        
         if msg_id in processed_messages: return
         processed_messages[msg_id] = ct
 
@@ -1855,32 +1899,27 @@ async def handle_message(bot, message):
         # ============ 📢 ارسال پیام همگانی (فقط مالک) ============
         broadcast_match = re.match(r"^ارسال\s+پیام\s+همگانی\s+گروه\s+([\s\S]+)$", raw_text.strip())
         if broadcast_match:
-            if not is_owner_check:
-                return
+            if not is_owner_check: return
             broadcast_text = broadcast_match.group(1).strip()
             if not broadcast_text:
                 try:
                     await bot.send_message(chat_id=chat_id, text="⚠️ متن پیام رو وارد کن.\n\nمثال:\n`ارسال پیام همگانی گروه سلام به همه`")
                 except: pass
                 return
-            
             groups = ensure_list(bot_data.get("known_groups", []))
             if not groups:
                 try:
                     await bot.send_message(chat_id=chat_id, text="📭 ربات توی هیچ گروهی عضو نیست.")
                 except: pass
                 return
-            
             status_msg = None
             try:
                 status_msg = await bot.send_message(chat_id=chat_id, text=f"📢 در حال ارسال به {len(groups)} گروه...")
             except: pass
-            
             sent = 0
             failed = 0
             failed_details = []
             dead_groups = []
-            
             for gid in groups:
                 try:
                     await bot.send_message(chat_id=gid, text=broadcast_text)
@@ -1898,7 +1937,6 @@ async def handle_message(bot, message):
                         failed_details.append((gid, err_str, False, val_err))
                         print(f"⚠️ [broadcast] خطای ارسال: {gid} | {err_str}", flush=True)
                     await asyncio.sleep(0.5)
-            
             if dead_groups:
                 current = ensure_list(bot_data.get("known_groups", []))
                 bot_data["known_groups"] = [g for g in current if g not in dead_groups]
@@ -1907,14 +1945,11 @@ async def handle_message(bot, message):
                     group_info_cache.pop(gid, None)
                     group_info_cache_ttl.pop(gid, None)
                 print(f"🧹 [broadcast] {len(dead_groups)} گروه مرده حذف شد", flush=True)
-            
             try:
                 if status_msg:
                     mid = extract_msg_id(status_msg)
-                    if mid:
-                        await bot.delete_message(chat_id=chat_id, message_id=mid)
+                    if mid: await bot.delete_message(chat_id=chat_id, message_id=mid)
             except: pass
-            
             report = (
                 f"✅ **ارسال همگانی انجام شد!**\n\n"
                 f"📤 موفق: **{sent}**\n"
@@ -1924,7 +1959,6 @@ async def handle_message(bot, message):
             if dead_groups:
                 report += f"🗑️ حذف‌شده (مرده): **{len(dead_groups)}**\n"
             report += f"\n⚡ **FLUXBOT**"
-            
             if failed_details:
                 details_text = "\n\n🔍 **جزئیات خطاها:**\n"
                 for gid, err_str, is_dead, val_err in failed_details[:20]:
@@ -1935,7 +1969,6 @@ async def handle_message(bot, message):
                 if len(failed_details) > 20:
                     details_text += f"\n... و {len(failed_details) - 20} خطای دیگر"
                 report += details_text
-            
             try:
                 await send_long_message(chat_id, report)
             except: pass
@@ -1953,7 +1986,6 @@ async def handle_message(bot, message):
                     print(f"⚠️ delete loading msg: {e}", flush=True)
                 await send_long_message(chat_id, groups_text)
                 return
-            
             if button_id == "btn_channel" or raw_text == BTN_CHANNEL:
                 await bot.send_message(chat_id=chat_id, text=get_channel_text()); return
             if button_id == "btn_help" or raw_text == BTN_HELP:
@@ -1965,14 +1997,12 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=text); return
             if button_id == "btn_dev" or raw_text == BTN_DEV:
                 await bot.send_message(chat_id=chat_id, text=get_dev_text()); return
-
             if button_id == "btn_invite_enter" or raw_text == BTN_INVITE_ENTER:
                 waiting_for_code[sender_id] = ct
                 await bot.send_message(chat_id=chat_id, text=(
                     "🎟️ **زدن کد دعوت**\n\nکد ۶ رقمی خود را ارسال کنید.\n\n"
                     "💡 برای لغو: «انصراف»\n\n⏱️ ۲ دقیقه فعال است.\n⚡ **FLUXBOT**"))
                 return
-
             if button_id == "btn_invite_show" or raw_text == BTN_INVITE_SHOW:
                 code = get_or_create_code(sender_id)
                 await bot.send_message(chat_id=chat_id, text=(
@@ -1981,7 +2011,6 @@ async def handle_message(bot, message):
                     f"💎 هر کسی وارد کند، هر دو **۱ امتیاز** می‌گیرید.\n\n"
                     f"⭐ **امتیاز فعلی:** {get_points(sender_id)}\n\n⚡ **FLUXBOT**"))
                 return
-
             if button_id == "btn_points" or raw_text == BTN_POINTS:
                 pts = get_points(sender_id)
                 code = get_or_create_code(sender_id)
@@ -1990,20 +2019,16 @@ async def handle_message(bot, message):
                     f"⭐ **امتیاز من**\n━━━━━━━━━━━━━━━━━━━\n\n"
                     f"💎 **امتیاز:** `{pts}`\n👥 **دعوت‌شده:** `{invited}`\n🎫 **کد:** `{code}`\n\n⚡ **FLUXBOT**"))
                 return
-
             if button_id == "btn_features" or raw_text == BTN_FEATURES or clean_text in ("قابلیت ها", "قابلیت‌ها", "قابلیت های ربات"):
                 await send_long_message(chat_id, get_features_text())
                 return
-
             if button_id == "btn_top_inviters" or raw_text == BTN_TOP_INVITERS:
                 text = await get_top_inviters_text()
                 await send_long_message(chat_id, text)
                 return
-
             if clean_text in ("لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "بازی ها", "بازی‌ها", "بازی"):
                 await bot.send_message(chat_id=chat_id, text=get_games_list_text())
                 return
-
             wait_ts = waiting_for_code.get(sender_id, 0)
             if wait_ts and ct - wait_ts < 120:
                 if raw_text in ("انصراف", "لغو", "/cancel"):
@@ -2019,7 +2044,6 @@ async def handle_message(bot, message):
                 del waiting_for_code[sender_id]
                 await bot.send_message(chat_id=chat_id, text="❌ **کد نامعتبر!** باید ۶ رقم باشد.")
                 return
-
             if is_command(clean_text, "start", "شروع", "منو"):
                 text = (
                     "╭─━━━━━━━━━━━━━━━━━━━─╮\n   ⚡ **FLUXBOT** ⚡\n   🌊 جریان قدرت 🌊\n╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
@@ -2068,7 +2092,7 @@ async def handle_message(bot, message):
                 except: pass
             return
 
-        # 🎨 راهنمای فونت (فقط کلمه فونت/فوت بدون متن)
+        # 🎨 راهنمای فونت
         if is_command(clean_text, "فونت", "فوت"):
             try:
                 await bot.send_message(
@@ -2102,6 +2126,66 @@ async def handle_message(bot, message):
             except Exception as e:
                 print(f"❌ challenge: {e}", flush=True)
             return
+
+        # 💬 سخنگو - پاسخ خودکار
+        if TALKATIVE_TRIGGERS_RE.match(raw_text.strip()):
+            if is_talkative_enabled(chat_id):
+                try:
+                    reply = get_random_talkative()
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=reply,
+                        reply_to_message_id=message.message_id
+                    )
+                except Exception as e:
+                    print(f"⚠️ talkative: {e}", flush=True)
+            return
+
+        # 🔄 قفل‌های دوکلمه‌ای - سخنگو
+        res = match_two_word_cmd(clean_text, "سخنگو")
+        if res is not None:
+            ui_temp = await get_user_info(chat_id, sender_id)
+            role_temp = ui_temp["role"]
+            is_owner_g = (role_temp == "مالک")
+            is_spec = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
+            if not (is_owner_g or is_spec):
+                return
+            set_talkative(chat_id, res)
+            if res:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "✅ **سخنگو فعال شد!**\n\n"
+                    "حالا هرکی بگه `فلکس بات`، ربات بهش جواب می‌ده 💬\n\n"
+                    "⚡ **FLUXBOT**"))
+            else:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "🔴 **سخنگو غیرفعال شد!**\n\n"
+                    "از این به بعد ربات به `فلکس بات` جواب نمی‌ده.\n\n"
+                    "⚡ **FLUXBOT**"))
+            return
+
+        # 🔄 قفل‌های دوکلمه‌ای - بقیه
+        lock_words_map = {
+            "لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
+            "خوش‌آمدگویی": "welcome", "خوشآمدگویی": "welcome",
+            "فحش": "profanity", "فوروارد": "forward", "هدایت": "forward",
+            "گیف": "gif", "خداحافظی": "goodbye",
+        }
+        for w, key in lock_words_map.items():
+            res = match_two_word_cmd(clean_text, w)
+            if res is not None:
+                ui_temp = await get_user_info(chat_id, sender_id)
+                role_temp = ui_temp["role"]
+                is_owner_g = (role_temp == "مالک")
+                is_spec = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
+                if not (is_owner_g or is_spec):
+                    return
+                settings[key] = res
+                bot_data["settings"] = settings
+                save_data(bot_data, force=True)
+                status = "🟢 باز" if res else "🔴 بسته"
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
+                                       text=f"✅ **{w}** {status} شد.\n\n⚡ **FLUXBOT**")
+                return
 
         ui = await get_user_info(chat_id, sender_id)
         role = ui["role"]
@@ -2176,9 +2260,7 @@ async def handle_message(bot, message):
             bot_data["rules"][chat_id] = rules_text
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                "✅ **قوانین گروه ثبت شد!**\n\n"
-                "📌 برای نمایش: `قوانین`\n\n"
-                "⚡ **FLUXBOT**"))
+                "✅ **قوانین گروه ثبت شد!**\n\n📌 برای نمایش: `قوانین`\n\n⚡ **FLUXBOT**"))
             return
 
         if is_command(clean_text, "حذف قوانین", "پاک قوانین"):
@@ -2204,8 +2286,7 @@ async def handle_message(bot, message):
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "✅ **پیام خوش‌آمدگویی تنظیم شد!**\n\n"
-                "💡 متغیرها: `{name}` / `{group}` / `{time}`\n\n"
-                "⚡ **FLUXBOT**"))
+                "💡 متغیرها: `{name}` / `{group}` / `{time}`\n\n⚡ **FLUXBOT**"))
             return
 
         if is_command(clean_text, "حذف پیام خوش آمدگویی", "حذف پیام خوش‌آمدگویی"):
@@ -2238,11 +2319,7 @@ async def handle_message(bot, message):
             bot_data["anti_repeat"][chat_id] = limit
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                f"✅ **ضد تکرار فعال شد!**\n\n"
-                f"📊 **حد:** {limit} پیام یکسان پشت سر هم\n"
-                f"⚠️ کاربر بعد از {limit} پیام یکسان، پاک می‌شه و اخطار می‌گیره.\n"
-                f"💡 اگه پیامش فرق داشته باشه، شمارنده ریست می‌شه.\n\n"
-                f"⚡ **FLUXBOT**"))
+                f"✅ **ضد تکرار فعال شد!**\n\n📊 **حد:** {limit} پیام یکسان\n\n⚡ **FLUXBOT**"))
             return
 
         if is_command(clean_text, "ضد تکرار بسته", "غیرفعال ضد تکرار"):
@@ -2251,8 +2328,7 @@ async def handle_message(bot, message):
             if chat_id in bot_data["anti_repeat"]:
                 del bot_data["anti_repeat"][chat_id]
                 save_data(bot_data, force=True)
-            if chat_id in repeat_tracker:
-                del repeat_tracker[chat_id]
+            if chat_id in repeat_tracker: del repeat_tracker[chat_id]
             await bot.send_message(chat_id=chat_id, text="✅ **ضد تکرار غیرفعال شد.**", reply_to_message_id=message.message_id)
             return
 
@@ -2263,8 +2339,7 @@ async def handle_message(bot, message):
             sec = parse_slow_duration(dur_text)
             if sec is None:
                 await bot.send_message(chat_id=chat_id, text=(
-                    "⚠️ **فرمت اشتباه!**\n\n"
-                    "مثال‌ها:\n"
+                    "⚠️ **فرمت اشتباه!**\n\nمثال‌ها:\n"
                     "├ `تنظیم حالت آهسته 5 ثانیه`\n"
                     "├ `تنظیم حالت آهسته 1 دقیقه`\n"
                     "├ `تنظیم حالت آهسته 1 ساعت`\n"
@@ -2274,10 +2349,7 @@ async def handle_message(bot, message):
             bot_data["slow_mode"][chat_id] = sec
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                f"✅ **حالت آهسته فعال شد!**\n\n"
-                f"⏱️ **مدت:** {format_duration(sec)}\n"
-                f"📌 هر کاربر فقط یک پیام در هر {format_duration(sec)} می‌تونه بفرسته.\n\n"
-                f"⚡ **FLUXBOT**"))
+                f"✅ **حالت آهسته فعال شد!**\n\n⏱️ **مدت:** {format_duration(sec)}\n\n⚡ **FLUXBOT**"))
             return
 
         if is_command(clean_text, "حالت آهسته بسته", "غیرفعال حالت آهسته"):
@@ -2286,8 +2358,7 @@ async def handle_message(bot, message):
             if chat_id in bot_data["slow_mode"]:
                 del bot_data["slow_mode"][chat_id]
                 save_data(bot_data, force=True)
-            if chat_id in slow_tracker:
-                del slow_tracker[chat_id]
+            if chat_id in slow_tracker: del slow_tracker[chat_id]
             await bot.send_message(chat_id=chat_id, text="✅ **حالت آهسته غیرفعال شد.**", reply_to_message_id=message.message_id)
             return
 
@@ -2305,10 +2376,8 @@ async def handle_message(bot, message):
                 if mid: await bot.delete_message(chat_id=chat_id, message_id=mid)
             except: pass
             await bot.send_message(chat_id=chat_id, text=(
-                f"🧹 **پاکسازی انجام شد!**\n\n"
-                f"✅ حذف شده: **{deleted}**\n"
-                f"❌ ناموفق: **{failed}**\n\n"
-                f"⚡ **FLUXBOT**"), reply_to_message_id=message.message_id)
+                f"🧹 **پاکسازی انجام شد!**\n\n✅ حذف شده: **{deleted}**\n❌ ناموفق: **{failed}**\n\n⚡ **FLUXBOT**"),
+                reply_to_message_id=message.message_id)
             return
 
         game_start_match = re.match(r"^(دوز|بازی دوز)\s*(قرمز|زرد)?$", clean_text)
@@ -2326,8 +2395,7 @@ async def handle_message(bot, message):
             color_emoji = RED if game["color1"] == "R" else YELLOW
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"🎮 **بازی دوز شروع شد!**\n\n👤 **سازنده:** {disp}\n🎨 **رنگ:** {color_emoji}\n\n"
-                f"⏳ **منتظر حریف...**\n\n📌 برای پیوستن: `شرکت`\n"
-                f"⏱️ اگه ۲ دقیقه کسی نیاد، خودکار لغو می‌شه.\n\n⚡ **FLUXBOT**"))
+                f"⏳ **منتظر حریف...**\n\n📌 برای پیوستن: `شرکت`\n\n⚡ **FLUXBOT**"))
             return
 
         if clean_text in ("بازی شیر یا خط", "شیر یا خط", "شیریا خط"):
@@ -2346,8 +2414,7 @@ async def handle_message(bot, message):
                 f"🪙 **بازی شیر یا خط شروع شد!**\n\n"
                 f"👤 **بازیکن:** {disp}\n\n"
                 f"🎯 **شیر یا خط؟** (بنویس `شیر` یا `خط`)\n\n"
-                f"⏱️ ۲ دقیقه فرصت داری.\n\n"
-                f"⚡ **FLUXBOT**"))
+                f"⏱️ ۲ دقیقه فرصت داری.\n\n⚡ **FLUXBOT**"))
             return
 
         if is_command(clean_text, "شرکت", "join"):
@@ -2447,6 +2514,36 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"⏰ **ساعت فعلی**\n━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🕐 `{now.strftime('%H:%M:%S')}`\n📅 `{now.strftime('%Y/%m/%d')}`\n📆 {wd}\n\n⚡ **FLUXBOT**"))
+            return
+
+        # 🎖️ دستور مقام (بعد از همه چیز)
+        if is_command(clean_text, "مقام", "رتبه", "مقامم", "رتبه‌م", "رتبم"):
+            try:
+                ui_fresh = await get_user_info(chat_id, sender_id, force=True)
+                role_fresh = ui_fresh.get("role", "عضو")
+                disp_fresh = format_user_display(ui_fresh, sender_id)
+                role_emoji = {"مالک": "👑", "ادمین": "⚡", "عضو": "👤"}.get(role_fresh, "👤")
+                role_desc = {
+                    "مالک": "صاحب و مالک این گروه",
+                    "ادمین": "مدیر این گروه",
+                    "عضو": "عضو عادی گروه",
+                }.get(role_fresh, "عضو گروه")
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    f"╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+                    f"   🎖️ **مقام شما** 🎖️\n"
+                    f"╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+                    f"👤 **نام:** {disp_fresh}\n"
+                    f"{role_emoji} **مقام:** {role_fresh}\n"
+                    f"📌 **توضیح:** {role_desc}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ **FLUXBOT**"
+                ))
+            except Exception as e:
+                print(f"❌ role cmd: {e}", flush=True)
+                try:
+                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
+                                           text="⚠️ خطا در دریافت مقام. لطفاً دوباره تلاش کن.")
+                except: pass
             return
 
         if is_command(clean_text, "حذف ویژه", "لغو ویژه", "حذف ادمین"):
@@ -2559,8 +2656,7 @@ async def handle_message(bot, message):
             if chat_id in bot_data.get("temp_locks", {}):
                 del bot_data["temp_locks"][chat_id]
                 had = True
-            if had:
-                save_data(bot_data, force=True)
+            if had: save_data(bot_data, force=True)
             msg = "🔓 **گروه باز شد!**" if had else "ℹ️ از قبل باز بود."
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
@@ -2627,6 +2723,8 @@ async def handle_message(bot, message):
             s.append(f"🔁 ضد تکرار: {'🔴 ' + str(ar) + ' پیام یکسان' if ar else '🟢 غیرفعال'}")
             slow = bot_data.get("slow_mode", {}).get(chat_id)
             s.append(f"🐌 حالت آهسته: {'🔴 ' + format_duration(slow) if slow else '🟢 غیرفعال'}")
+            tk = "🟢 فعال" if is_talkative_enabled(chat_id) else "🔴 غیرفعال"
+            s.append(f"💬 سخنگو: {tk}")
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "🔒 **قفل گروه**\n━━━━━━━━━━━━━━━━━━━\n\n" + "\n\n".join(s) + "\n\n⚡ **FLUXBOT**"))
             return
@@ -2878,21 +2976,6 @@ async def handle_message(bot, message):
             await add_warning(chat_id, tgt, "اخطار دستی مالک", user_info=ti)
             return
 
-        feat = re.match(r"^(لینک|آیدی|اسپم|هایپرلینک|خوش‌آمدگویی|فحش|فوروارد|هدایت|گیف|خداحافظی)\s+(باز|بسته)$", clean_text)
-        if feat:
-            if not can_manage: return
-            f, s = feat.group(1), feat.group(2)
-            km = {"لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
-                  "خوش‌آمدگویی": "welcome", "فحش": "profanity", "فوروارد": "forward",
-                  "هدایت": "forward", "گیف": "gif", "خداحافظی": "goodbye"}
-            k = km.get(f)
-            if k:
-                settings[k] = (s == "بسته")
-                bot_data["settings"] = settings
-                save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, text=f"✅ {f} {s} شد.", reply_to_message_id=message.message_id)
-            return
-
         if is_command(clean_text, "لیست قفل"):
             if not can_manage: return
             st = lambda v: "🔴" if v else "🟢"
@@ -2912,6 +2995,7 @@ async def handle_message(bot, message):
             slows = f"🔴 {format_duration(slow)}" if slow else "🟢 غیرفعال"
             rl = bot_data.get("rules", {}).get(chat_id)
             rs = "🔴 تنظیم شده" if rl else "🟢 تنظیم نشده"
+            tk = "🔴 فعال" if is_talkative_enabled(chat_id) else "🟢 غیرفعال"
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "📋 **قفل‌ها**\n━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🔗 لینک: {st(settings['link'])}\n🆔 آیدی: {st(settings['id'])}\n"
@@ -2922,7 +3006,8 @@ async def handle_message(bot, message):
                 f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n"
                 f"🔁 ضد تکرار: {ars}\n"
                 f"🐌 حالت آهسته: {slows}\n"
-                f"📜 قوانین: {rs}\n\n⚡ **FLUXBOT**"))
+                f"📜 قوانین: {rs}\n"
+                f"💬 سخنگو: {tk}\n\n⚡ **FLUXBOT**"))
             return
 
         am = re.match(r"^تنظیم\s+اصل\s+(.+)$", clean_text)
@@ -2980,10 +3065,6 @@ async def handle_message(bot, message):
                 f"🐺 اصل: `{asl}`\n🎭 لقب: `{lgh}`\n👑 مقام: {role}\n"
                 f"⭐ وضعیت: {ss}\n💎 امتیاز: `{pts}`\n⚠️ اخطار: [{wc}/{wl}]\n"
                 f"📅 پیوست: {jd}\n💬 پیام امروز: {tc}\n\n⚡ **FLUXBOT**"))
-            return
-
-        if is_command(clean_text, "مقام"):
-            await bot.send_message(chat_id=chat_id, text=f"👤 {role}", reply_to_message_id=message.message_id)
             return
 
         if not bot_is_active: return
