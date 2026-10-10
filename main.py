@@ -70,13 +70,17 @@ OFF_WORDS = {"بسته", "خاموش", "غیرفعال", "قفل", "بستن", "
 
 def match_two_word_cmd(text, word):
     if not text: return None
-    parts = text.strip().split()
+    # 🆕 نرمال‌سازی نیم‌فاصله به فاصله
+    t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
+    parts = [p for p in t_norm.strip().split() if p.strip()]
     if len(parts) != 2: return None
     a, b = parts[0].strip(), parts[1].strip()
-    if a == word:
+    # 🆕 نرمال کلمه ورودی هم
+    w_norm = word.replace('\u200c', ' ').replace('\u200d', ' ')
+    if a == w_norm:
         if b in ON_WORDS: return True
         if b in OFF_WORDS: return False
-    if b == word:
+    if b == w_norm:
         if a in ON_WORDS: return True
         if a in OFF_WORDS: return False
     return None
@@ -271,7 +275,6 @@ for _keys, _reps in TALKATIVE_MAP.items():
     TALKATIVE_PHRASES.extend(_reps)
 
 
-# 🆕 تابع کمکی برای تشخیص کلیدواژه‌های ترکیبی (space یا ZWNJ یا tab)
 def _is_talkative_phrase(kw):
     for c in kw:
         if c in ' \u200c\u200d\t':
@@ -285,11 +288,9 @@ for _keys, _reps in TALKATIVE_MAP.items():
     for _k in _keys:
         _k_lower = _k.lower()
         _is_p = _is_talkative_phrase(_k_lower)
-        # نسخه اصلی
         if _k_lower not in _seen_kw:
             _TALKATIVE_FLAT.append((_k_lower, _reps, _is_p))
             _seen_kw.add(_k_lower)
-        # نسخه بدون ZWNJ (برای ورودی کاربر)
         _k_clean = _k_lower.replace('\u200c', '').replace('\u200d', '')
         if _k_clean != _k_lower and _k_clean not in _seen_kw:
             _TALKATIVE_FLAT.append((_k_clean, _reps, _is_talkative_phrase(_k_clean)))
@@ -302,9 +303,7 @@ def get_talkative_reply(text):
     if not text: return None
     t = text.strip().lower()
     if not t: return None
-    # نسخه بدون ZWNJ
     t_clean = t.replace('\u200c', '').replace('\u200d', '')
-    # تقسیم کلمات
     words = [w.strip() for w in re.split(r'[\s,،.!?؟:;()\[\]{}«»\-\u200c]+', t) if w.strip()]
     words_clean = [w.strip() for w in re.split(r'[\s,،.!?؟:;()\[\]{}«»\-\u200c]+', t_clean) if w.strip()]
     if not words: return None
@@ -467,7 +466,15 @@ async def start_game(chat_id, sender_id, sender_display, color_choice):
     games = get_games()
     if chat_id in games:
         g = games[chat_id]
-        if g.get("status") in ("waiting", "playing"): return None
+        if g.get("status") in ("waiting", "playing"):
+            # 🆕 چک بازی قدیمی (گیر کرده بعد از ری‌استارت)
+            started = g.get("started_at", 0)
+            if time.time() - started > (GAME_TIMEOUT * 3):
+                print(f"🗑️ [stale-game] پاک شد: {chat_id}", flush=True)
+                del games[chat_id]
+                save_data(bot_data, force=True)
+            else:
+                return None
     color1 = "R" if color_choice == "قرمز" else "Y" if color_choice == "زرد" else "R"
     color2 = "Y" if color1 == "R" else "R"
     games[chat_id] = {
@@ -518,16 +525,17 @@ def ensure_list(value):
 
 
 def ensure_list_dict(d, key, sub_key=None):
-    if key not in d:
-        d[key] = []
-        return d[key]
+    # 🆕 فیکس: استفاده از isinstance برای جلوگیری از تبدیل ناخواسته
     if sub_key is not None:
-        if not isinstance(d[key], dict): d[key] = {}
-        if sub_key not in d[key]: d[key][sub_key] = []
-        d[key][sub_key] = ensure_list(d[key][sub_key])
+        if key not in d or not isinstance(d[key], dict):
+            d[key] = {}
+        if sub_key not in d[key] or not isinstance(d[key][sub_key], list):
+            d[key][sub_key] = []
         return d[key][sub_key]
-    d[key] = ensure_list(d[key])
-    return d[key]
+    else:
+        if key not in d or not isinstance(d[key], list):
+            d[key] = []
+        return d[key]
 
 
 async def schedule_delete(chat_id, message_id, delay_seconds):
@@ -2499,7 +2507,6 @@ async def handle_message(bot, message):
                     print(f"⚠️ delete spam: {e}", flush=True)
                 return
 
-        # 7️⃣ قفل‌های محتوا (قبل از همه دستورات!)
         if bot_is_active and not can_manage:
             if settings.get("profanity", True):
                 if contains_profanity(raw_text):
@@ -2554,11 +2561,9 @@ async def handle_message(bot, message):
                     print(f"⚠️ delete gif: {e}", flush=True)
                 return
 
-        # 🛑 اگه ربات غیرفعاله، برای کاربرای عادی هیچ کاری نکن
         if not bot_is_active and not can_manage:
             return
 
-        # 8️⃣ خوش‌آمدگویی
         if settings.get("welcome", True) and bot_is_active and not can_manage:
             welcomed = bot_data.get("welcomed_users", {}).get(chat_id, {})
             if sender_id not in welcomed:
@@ -2572,7 +2577,6 @@ async def handle_message(bot, message):
                 bot_data["welcomed_users"][chat_id][sender_id] = True
                 save_data(bot_data)
 
-        # 9️⃣ ثبت آمار
         today = get_local_now().strftime("%Y-%m-%d")
         if chat_id not in bot_data["message_counts"]: bot_data["message_counts"][chat_id] = {}
         if sender_id not in bot_data["message_counts"][chat_id]:
@@ -2581,8 +2585,6 @@ async def handle_message(bot, message):
             bot_data["message_counts"][chat_id][sender_id] = {"today": 0, "date": today}
         bot_data["message_counts"][chat_id][sender_id]["today"] += 1
         save_data(bot_data)
-
-        # ============ دستورات ============
 
         # 🎯 چالش
         if is_command(clean_text, "چالش"):
@@ -2844,14 +2846,25 @@ async def handle_message(bot, message):
         if game_start_match:
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
                 g = games[chat_id]
-                if g["status"] == "waiting":
-                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                        f"⏳ **بازی در انتظار حریف!**\n\n👤 **سازنده:** {g['player1_name']}\n📌 برای پیوستن: `شرکت`"))
+                started = g.get("started_at", 0)
+                # 🆕 چک بازی قدیمی (گیر کرده بعد از ری‌استارت)
+                if time.time() - started > (GAME_TIMEOUT * 3):
+                    print(f"🗑️ [stale-game] پاک شد: {chat_id}", flush=True)
+                    del games[chat_id]
+                    save_data(bot_data, force=True)
                 else:
-                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یک بازی در حال اجراست!**")
-                return
+                    if g["status"] == "waiting":
+                        await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                            f"⏳ **بازی در انتظار حریف!**\n\n👤 **سازنده:** {g['player1_name']}\n📌 برای پیوستن: `شرکت`"))
+                    else:
+                        await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یک بازی در حال اجراست!**")
+                    return
             color_choice = game_start_match.group(2) or "قرمز"
             game = await start_game(chat_id, sender_id, disp, color_choice)
+            if game is None:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
+                                       text="⚠️ **یک بازی در حال اجراست!**")
+                return
             color_emoji = RED if game["color1"] == "R" else YELLOW
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 f"🎮 **بازی دوز شروع شد!**\n\n👤 **سازنده:** {disp}\n🎨 **رنگ:** {color_emoji}\n\n"
@@ -2861,8 +2874,16 @@ async def handle_message(bot, message):
 
         if clean_text in ("بازی شیر یا خط", "شیر یا خط", "شیریا خط"):
             if chat_id in coin_flip_games:
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یک بازی شیر یا خط در جریانه!**")
-                return
+                cf = coin_flip_games[chat_id]
+                started = cf.get("started_at", 0)
+                # 🆕 چک بازی قدیمی
+                if time.time() - started > (GAME_TIMEOUT * 3):
+                    print(f"🗑️ [stale-coinflip] پاک شد: {chat_id}", flush=True)
+                    del coin_flip_games[chat_id]
+                else:
+                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
+                                           text="⚠️ **یک بازی شیر یا خط در جریانه!**")
+                    return
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یه بازی دیگه در جریانه!** اول اون تموم شه.")
                 return
