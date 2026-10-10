@@ -47,7 +47,7 @@ GAME_TIMEOUT = 120
 username_cache = {}
 username_cache_ttl = {}
 spam_tracker = {}
-processed_messages = {}   # {msg_id: last_text}
+processed_messages = {}
 text_dedup = {}
 waiting_for_code = {}
 group_info_cache = {}
@@ -57,7 +57,6 @@ save_counter = {"data": 0, "cache": 0}
 repeat_tracker = {}
 slow_tracker = {}
 coin_flip_games = {}
-edit_tracker = {}   # {msg_id: last_text}   - جدا برای ویرایش
 
 EMPTY = "⚫"
 RED = "🔴"
@@ -84,523 +83,219 @@ def match_two_word_cmd(text, word):
 
 
 # ================== 💬 TALKATIVE (سخنگو) - Keyword Based ==================
-# ساختار: { (کلمات کلیدی): [۵ پاسخ] }
 TALKATIVE_MAP = {
-    # ═══════════ نام ربات ═══════════
     ("ربات فلکس بات", "ربات فلاکس بات", "ربات فلوکس بات",
      "فلکس بات", "فلاکس بات", "فلوکس بات", "فلکسی بات",
      "ربات فلکس", "ربات فلاکس", "ربات فلوکس",
      "flux bot", "flaks bot", "falaks bot"): [
-        "بله جانم؟ 🌷",
-        "جانم عزیزم 💕",
-        "در خدمتم 💐",
-        "چیزی لازم داری؟ 🤝",
-        "بفرمایید 🌸",
+        "بله جانم؟ 🌷", "جانم عزیزم 💕", "در خدمتم 💐", "چیزی لازم داری؟ 🤝", "بفرمایید 🌸",
     ],
     ("ربات", "بات", "روبات", "bot", "robot"): [
-        "جانم؟ 🥰",
-        "بله؟ 🤗",
-        "چی شد؟ 😊",
-        "در خدمتم 🌹",
-        "بله بنده؟ 🙋",
+        "جانم؟ 🥰", "بله؟ 🤗", "چی شد؟ 😊", "در خدمتم 🌹", "بله بنده؟ 🙋",
     ],
     ("فلکس", "فلاکس", "فلوکس", "فلکسی", "flux", "flaks", "falaks", "flox"): [
-        "جانم عزیزم 💖",
-        "بله؟ 🤗",
-        "چی شد؟ 🌹",
-        "بفرما 🌺",
-        "چاکرم 🎩",
+        "جانم عزیزم 💖", "بله؟ 🤗", "چی شد؟ 🌹", "بفرما 🌺", "چاکرم 🎩",
     ],
-
-    # ═══════════ سلام و احوال‌پرسی ═══════════
     ("سلام", "سلوم", "سلم", "salam"): [
-        "سلام بر تو 🌸",
-        "علیک سلام 🌹",
-        "سلام عزیز دل 🌹",
-        "سلام گلم 🌺",
-        "سلام جانم 💖",
+        "سلام بر تو 🌸", "علیک سلام 🌹", "سلام عزیز دل 🌹", "سلام گلم 🌺", "سلام جانم 💖",
     ],
     ("درود", "درود بر تو", "درود بر شما"): [
-        "درود بر تو 🌟",
-        "درود بر تو ای عزیز 🌹",
-        "درود ای رفیق 🤝",
-        "سلام و درود 💐",
-        "درود بر تو ای گران‌قدر 💎",
+        "درود بر تو 🌟", "درود بر تو ای عزیز 🌹", "درود ای رفیق 🤝", "سلام و درود 💐", "درود بر تو ای گران‌قدر 💎",
     ],
     ("خوبی", "حالت چطوره", "حالت خوبه", "خوب هستی", "چطوری", "چطورید", "چطور هستی"): [
-        "خوبم مرسی 💚",
-        "خوبم تو چطوری؟ 😊",
-        "خوبم سلامتی؟ 🌿",
-        "خوبم ممنون 🙏",
-        "خوبم عزیز 🌹",
+        "خوبم مرسی 💚", "خوبم تو چطوری؟ 😊", "خوبم سلامتی؟ 🌿", "خوبم ممنون 🙏", "خوبم عزیز 🌹",
     ],
     ("چه خبر", "چخبر", "چی خبر", "خبری هست"): [
-        "خبری نیست 📰",
-        "سلامتی 📻",
-        "خبری نداری؟ 📢",
-        "خب تو بگو 🗣️",
-        "همه چیز خوب 💚",
+        "خبری نیست 📰", "سلامتی 📻", "خبری نداری؟ 📢", "خب تو بگو 🗣️", "همه چیز خوب 💚",
     ],
-    ("حالت خوبه", "حالت خوبه؟"): [
-        "بله خوبم مرسی 💚",
-        "خوبم تو خوبی؟ 😊",
-        "مرسی، تو چطوری؟ 🌹",
-        "خوبم سلامتی؟ 🌿",
-        "ممنون، خوبم 🙏",
-    ],
-
-    # ═══════════ تشکر ═══════════
     ("ممنون", "مرسی", "سپاس", "دستت درد نکنه"): [
-        "خواهش می‌کنم 🙏",
-        "قابلی نداشت 😊",
-        "کاری نکردم 💚",
-        "سلامت باشی 🌿",
-        "خواهش 🌹",
+        "خواهش می‌کنم 🙏", "قابلی نداشت 😊", "کاری نکردم 💚", "سلامت باشی 🌿", "خواهش 🌹",
     ],
-    ("خدا خیرت بده", "خدا خیرت بده"): [
-        "خدا خیر تو هم بده 🌹",
-        "الهی آمین 🙏",
-        "لطف داری 🌸",
-        "مرسی عزیز 💚",
-        "خدا حفظت کنه 💐",
-    ],
-
-    # ═══════════ خداحافظی ═══════════
     ("خداحافظ", "خدانگهدار", "بدرود", "بای", "بای بای", "bye", "خدا نگهدار"): [
-        "خداحافظ 👋",
-        "به سلامت 🚶",
-        "خدانگهدار 🙏",
-        "مواظب خودت باش 💚",
-        "بدرود 🌹",
+        "خداحافظ 👋", "به سلامت 🚶", "خدانگهدار 🙏", "مواظب خودت باش 💚", "بدرود 🌹",
     ],
     ("شب بخیر", "شبت بخیر", "خواب خوب"): [
-        "شب تو هم بخیر 🌙",
-        "خواب خوب ببینی 💤",
-        "شب بخیر عزیز 🌹",
-        "خوابای شیرین 💫",
-        "شب آروم 🌙",
+        "شب تو هم بخیر 🌙", "خواب خوب ببینی 💤", "شب بخیر عزیز 🌹", "خوابای شیرین 💫", "شب آروم 🌙",
     ],
-    ("صبح بخیر", "صبحت بخیر", "روز بخیر", "صبحت بخیر"): [
-        "صبح تو هم بخیر ☀️",
-        "روز خوبی داشته باشی 🌸",
-        "صبح بخیر عزیز 🌹",
-        "صبح قشنگ ☀️",
-        "صبح زیبا 🌞",
+    ("صبح بخیر", "صبحت بخیر", "روز بخیر"): [
+        "صبح تو هم بخیر ☀️", "روز خوبی داشته باشی 🌸", "صبح بخیر عزیز 🌹", "صبح قشنگ ☀️", "صبح زیبا 🌞",
     ],
-
-    # ═══════════ عشق و محبت ═══════════
     ("دوستت دارم", "دوسِت دارم", "عاشقتم", "عاشقت هستم", "دوست دارم"): [
-        "منم دوستت دارم 💖",
-        "منم 💕",
-        "قربونت برم 💗",
-        "دوست منی 💚",
-        "عاشقتم 💝",
+        "منم دوستت دارم 💖", "منم 💕", "قربونت برم 💗", "دوست منی 💚", "عاشقتم 💝",
     ],
     ("بوس", "بوسه", "بوسم کن", "بوسم"): [
-        "بوس بفرست 😘",
-        "بغل 🤗",
-        "قربونت 💗",
-        "بیا بغل 🤗",
-        "منم بوس 🌹",
+        "بوس بفرست 😘", "بغل 🤗", "قربونت 💗", "بیا بغل 🤗", "منم بوس 🌹",
     ],
     ("عزیزم", "جانم", "جونم", "دلبرم"): [
-        "جانم عزیزم 💖",
-        "بله گلم 🌹",
-        "چی می‌خوای عزیزم؟ 🌸",
-        "جونم بگو 💕",
-        "در خدمتم جانم 🌷",
+        "جانم عزیزم 💖", "بله گلم 🌹", "چی می‌خوای عزیزم؟ 🌸", "جونم بگو 💕", "در خدمتم جانم 🌷",
     ],
     ("قربونت", "فدات", "قربون", "فدای تو"): [
-        "منم قربونت 💗",
-        "فدای تو هم بشم 🌹",
-        "قربون تو هم 💖",
-        "نوکرتم 🎩",
-        "چاکرم 💐",
+        "منم قربونت 💗", "فدای تو هم بشم 🌹", "قربون تو هم 💖", "نوکرتم 🎩", "چاکرم 💐",
     ],
-
-    # ═══════════ معرفی ═══════════
     ("کی هستی", "تو کی هستی", "تو چی هستی", "خودت رو معرفی کن"): [
-        "من ربات فلکس باتم 🤖",
-        "من یه رباتم 🤖",
-        "ربات سرگرمی 💫",
-        "فلکس بات هستم 🌟",
-        "ربات شما 🤖",
+        "من ربات فلکس باتم 🤖", "من یه رباتم 🤖", "ربات سرگرمی 💫", "فلکس بات هستم 🌟", "ربات شما 🤖",
     ],
-    ("اسمت چیه", "اسمت چیه؟", "نامت چیه", "اسم تو چیه"): [
-        "فلکس بات 🌟",
-        "اسمم فلکس بات 🤖",
-        "فلکس بات 💫",
-        "من فلکس باتم 🌹",
-        "فلکس بات عزیز 💚",
+    ("اسمت چیه", "نامت چیه", "اسم تو چیه"): [
+        "فلکس بات 🌟", "اسمم فلکس بات 🤖", "فلکس بات 💫", "من فلکس باتم 🌹", "فلکس بات عزیز 💚",
     ],
     ("چند سالته", "چند سالت", "سنت چقدره", "چند سال داری"): [
-        "من تازه متولد شدم 👶",
-        "معلوم نیست 😅",
-        "کوچیکم 🍼",
-        "سن ندارم 🤖",
-        "تازه کارم 🌱",
+        "من تازه متولد شدم 👶", "معلوم نیست 😅", "کوچیکم 🍼", "سن ندارم 🤖", "تازه کارم 🌱",
     ],
-    ("چیکار می‌کنی", "چکار می‌کنی", "چیکار می‌کنی؟", "مشغول چی هستی"): [
-        "دارم بهت جواب می‌دم 😄",
-        "مشغول توام 💚",
-        "کاری نمی‌کنم 😊",
-        "منتظرتم ✨",
-        "گوش به زنگ 🎧",
+    ("چیکار می‌کنی", "چکار می‌کنی", "مشغول چی هستی"): [
+        "دارم بهت جواب می‌دم 😄", "مشغول توام 💚", "کاری نمی‌کنم 😊", "منتظرتم ✨", "گوش به زنگ 🎧",
     ],
     ("کجایی", "کجا هستی", "کجا هستی الان"): [
-        "من همه جا هستم 💫",
-        "پیشتم 🥰",
-        "تو گوشیت 😄",
-        "اینجام 🤗",
-        "همیشه کنارتم 💚",
+        "من همه جا هستم 💫", "پیشتم 🥰", "تو گوشیت 😄", "اینجام 🤗", "همیشه کنارتم 💚",
     ],
-
-    # ═══════════ احساسات ═══════════
     ("خوشحالم", "خوشحال هستم", "شادم", "شاد هستم"): [
-        "چه خوب 🎉",
-        "منم خوشحالم 💚",
-        "خوشحالیت خوشحالم می‌کنه 😊",
-        "آفرین 🎊",
-        "همیشه شاد باش ✨",
+        "چه خوب 🎉", "منم خوشحالم 💚", "خوشحالیت خوشحالم می‌کنه 😊", "آفرین 🎊", "همیشه شاد باش ✨",
     ],
     ("ناراحتم", "غمگینم", "دلم گرفته", "دلم تنگه"): [
-        "چی شده عزیز؟ 🥺",
-        "ناراحت نباش 💚",
-        "دل منم برات 💗",
-        "بگو چی شده 🌹",
-        "آروم باش 💐",
+        "چی شده عزیز؟ 🥺", "ناراحت نباش 💚", "دل منم برات 💗", "بگو چی شده 🌹", "آروم باش 💐",
     ],
     ("عصبانی‌ام", "عصبانی هستم", "اعصابم خرده", "اعصابم خورده"): [
-        "آروم باش عزیز 😌",
-        "چی شده؟ 🤔",
-        "عصبانی نباش 💚",
-        "یه نفس عمیق 🌬️",
-        "بگو تا آروم شی 🌹",
+        "آروم باش عزیز 😌", "چی شده؟ 🤔", "عصبانی نباش 💚", "یه نفس عمیق 🌬️", "بگو تا آروم شی 🌹",
     ],
     ("خسته‌ام", "خسته هستم", "خستم", "خسته شدم"): [
-        "خسته نباشی 💪",
-        "استراحت کن 🛋️",
-        "زحمت کشیدی 🌹",
-        "خدا قوت 💚",
-        "یه استراحت بکن 🌙",
+        "خسته نباشی 💪", "استراحت کن 🛋️", "زحمت کشیدی 🌹", "خدا قوت 💚", "یه استراحت بکن 🌙",
     ],
     ("گرسنمه", "گرسنه‌ام", "گشنمه", "گرسنه هستم"): [
-        "برو غذا بخور 🍕",
-        "چی می‌خوری؟ 🍔",
-        "منم گشنمه 🍽️",
-        "یه چیزی بخور 🥪",
-        "غذای خوب بخور 🍲",
+        "برو غذا بخور 🍕", "چی می‌خوری؟ 🍔", "منم گشنمه 🍽️", "یه چیزی بخور 🥪", "غذای خوب بخور 🍲",
     ],
     ("تشنمه", "تشنه هستم", "تشنه‌ام"): [
-        "آب بخور 💧",
-        "شربت بخور 🥤",
-        "چایی می‌خوری؟ 🍵",
-        "آبمیوه بخور 🧃",
-        "نوشیدنی بخور 🥛",
+        "آب بخور 💧", "شربت بخور 🥤", "چایی می‌خوری؟ 🍵", "آبمیوه بخور 🧃", "نوشیدنی بخور 🥛",
     ],
-    ("خوابم میاد", "خوابم میاد", "خواب‌آلوده", "خسته و خواب‌آلود"): [
-        "برو بخواب 😴",
-        "خواب خوب ببینی 💤",
-        "شب بخیر 🌙",
-        "استراحت کن 🛏️",
-        "خواب قشنگ ببینی 💫",
+    ("خوابم میاد", "خواب‌آلوده", "خسته و خواب‌آلود"): [
+        "برو بخواب 😴", "خواب خوب ببینی 💤", "شب بخیر 🌙", "استراحت کن 🛏️", "خواب قشنگ ببینی 💫",
     ],
-
-    # ═══════════ تعریف و تحسین ═══════════
     ("آفرین", "احسنت", "مرحبا", "ایول", "ایول داری"): [
-        "مرسی 🌹",
-        "لطف داری 💚",
-        "قابلی نداشت 😊",
-        "ممنون 🙏",
-        "خواهش می‌کنم 💐",
+        "مرسی 🌹", "لطف داری 💚", "قابلی نداشت 😊", "ممنون 🙏", "خواهش می‌کنم 💐",
     ],
     ("بارک الله", "بارک‌الله", "ماشالله", "ماشاءالله"): [
-        "الهی شکر 🙏",
-        "ممنون 💚",
-        "لطف داری 🌹",
-        "خدا برکت بده ✨",
-        "آفرین 👏",
+        "الهی شکر 🙏", "ممنون 💚", "لطف داری 🌹", "خدا برکت بده ✨", "آفرین 👏",
     ],
     ("قشنگه", "قشنگ", "زیبا", "زیباست"): [
-        "ممنون 🌸",
-        "لطف داری 💐",
-        "چشمای تو قشنگه 😍",
-        "مرسی عزیز 🌹",
-        "لطف شماست 💕",
+        "ممنون 🌸", "لطف داری 💐", "چشمای تو قشنگه 😍", "مرسی عزیز 🌹", "لطف شماست 💕",
     ],
     ("باحال", "باحاله", "خفن", "خفنه", "عالیه"): [
-        "مرسی 🎉",
-        "لطف داری 😎",
-        "قابلی نداشت 💚",
-        "خواهش می‌کنم 🌟",
-        "ممنون 🔥",
+        "مرسی 🎉", "لطف داری 😎", "قابلی نداشت 💚", "خواهش می‌کنم 🌟", "ممنون 🔥",
     ],
-
-    # ═══════════ درخواست کمک ═══════════
     ("کمکم کن", "کمک کن", "کمکی", "کمک می‌خوام"): [
-        "چطور کمکت کنم؟ 💪",
-        "در خدمتم 🤝",
-        "بگو چیکار کنم ⚡",
-        "امر کن 👑",
-        "چی لازم داری؟ 🎯",
+        "چطور کمکت کنم؟ 💪", "در خدمتم 🤝", "بگو چیکار کنم ⚡", "امر کن 👑", "چی لازم داری؟ 🎯",
     ],
-
-    # ═══════════ زمان ═══════════
     ("ساعت چنده", "ساعت چند", "زمان چیه", "ساعت چیه"): [
-        "برای ساعت بنویس `ساعت` ⏰",
-        "بزودی می‌گم 🕐",
-        "برای ساعت `ساعت` بزن ⏰",
-        "زمان مهمه ⏳",
-        "دستور `ساعت` رو بزن 🕐",
+        "برای ساعت بنویس `ساعت` ⏰", "بزودی می‌گم 🕐", "برای ساعت `ساعت` بزن ⏰", "زمان مهمه ⏳", "دستور `ساعت` رو بزن 🕐",
     ],
     ("امروز چندمه", "تاریخ امروز", "چندم ماهه", "تاریخ چیه"): [
-        "برای تاریخ بنویس `ساعت` 📅",
-        "دستور `ساعت` رو بزن 📅",
-        "تاریخ دقیق: `ساعت` 📆",
-        "زمان و تاریخ: `ساعت` 🗓️",
-        "بزن `ساعت` ببین 📅",
+        "برای تاریخ بنویس `ساعت` 📅", "دستور `ساعت` رو بزن 📅", "تاریخ دقیق: `ساعت` 📆", "زمان و تاریخ: `ساعت` 🗓️", "بزن `ساعت` ببین 📅",
     ],
-
-    # ═══════════ حالت‌های مختلف ═══════════
     ("بیکارم", "بیکار هستم", "حوصله ندارم", "حوصلم سر رفته"): [
-        "بیا حرف بزنیم 🗣️",
-        "بریم بازی کنیم 🎮",
-        "بیا شوخی کنیم 😄",
-        "چی می‌خوای بگی؟ 💬",
-        "بیا سرگرمت کنم 🎉",
+        "بیا حرف بزنیم 🗣️", "بریم بازی کنیم 🎮", "بیا شوخی کنیم 😄", "چی می‌خوای بگی؟ 💬", "بیا سرگرمت کنم 🎉",
     ],
     ("مشغولم", "کار دارم", "وقت ندارم", "سرم شلوغه"): [
-        "اوکی، بعداً 🌹",
-        "موفق باشی 💚",
-        "کارت رو بکن 👍",
-        "منتظرتم ⏰",
-        "بعد بیا حرف بزنیم 💐",
+        "اوکی، بعداً 🌹", "موفق باشی 💚", "کارت رو بکن 👍", "منتظرتم ⏰", "بعد بیا حرف بزنیم 💐",
     ],
     ("تنهام", "تنها هستم", "تنهایی"): [
-        "من هستم کنارتم 💚",
-        "تنها نیستی 🥰",
-        "من دوستتم 🤝",
-        "همیشه کنارتم 💫",
-        "بیا حرف بزنیم 🌹",
+        "من هستم کنارتم 💚", "تنها نیستی 🥰", "من دوستتم 🤝", "همیشه کنارتم 💫", "بیا حرف بزنیم 🌹",
     ],
     ("ترسیدم", "می‌ترسم", "ترسناکه"): [
-        "نترس عزیز 💚",
-        "من هستم کنارت 🤗",
-        "چی ترسیدت؟ 🤔",
-        "آروم باش 🌹",
-        "همه چی خوبه 💐",
+        "نترس عزیز 💚", "من هستم کنارت 🤗", "چی ترسیدت؟ 🤔", "آروم باش 🌹", "همه چی خوبه 💐",
     ],
     ("دردم میاد", "درد دارم", "مریضم", "سردرد دارم"): [
-        "خدا شفات بده 🙏",
-        "زود خوب شی 💚",
-        "استراحت کن 🌹",
-        "دکتر برو 🩺",
-        "سلامت باشی 🌿",
+        "خدا شفات بده 🙏", "زود خوب شی 💚", "استراحت کن 🌹", "دکتر برو 🩺", "سلامت باشی 🌿",
     ],
-
-    # ═══════════ واکنش‌ها ═══════════
     ("وای", "واو", "اوه", "ای بابا"): [
-        "چی شد؟ 😲",
-        "چیه؟ 🤔",
-        "بگو ببینم 😊",
-        "چه خبره؟ 📢",
-        "چی شده یهو؟ 😯",
+        "چی شد؟ 😲", "چیه؟ 🤔", "بگو ببینم 😊", "چه خبره؟ 📢", "چی شده یهو؟ 😯",
     ],
     ("آخ", "آخ آخ", "اَه", "اه"): [
-        "چی شد؟ 🤕",
-        "دردت گرفت؟ 🩹",
-        "خوبی؟ 💚",
-        "چیزی شده؟ 😟",
-        "سلامت باش 🌿",
+        "چی شد؟ 🤕", "دردت گرفت؟ 🩹", "خوبی؟ 💚", "چیزی شده؟ 😟", "سلامت باش 🌿",
     ],
     ("خخخ", "هههه", "ههه", "هاها", "لول"): [
         "😂", "😄", "🤣", "خنده‌داره 😆", "منم خندیدم 😂",
     ],
-
-    # ═══════════ بیشتر عاشقانه ═══════════
     ("نازنین", "نازنینم", "عزیز دل"): [
-        "جانم نازنینم 🌹",
-        "فدای تو 💖",
-        "قربونت برم 💗",
-        "عشقم 💕",
-        "دلبرم 💐",
+        "جانم نازنینم 🌹", "فدای تو 💖", "قربونت برم 💗", "عشقم 💕", "دلبرم 💐",
     ],
-
-    # ═══════════ بازی ═══════════
     ("بازی کنیم", "بازی می‌کنی", "بیا بازی"): [
-        "دوز بازی کنیم؟ 🎲",
-        "برای بازی بنویس `دوز` 🎮",
-        "شیر یا خط؟ 🪙",
-        "بیا `دوز` بازی کنیم 🎲",
-        "لیست بازی: `لیست بازی` 🎮",
+        "دوز بازی کنیم؟ 🎲", "برای بازی بنویس `دوز` 🎮", "شیر یا خط؟ 🪙", "بیا `دوز` بازی کنیم 🎲", "لیست بازی: `لیست بازی` 🎮",
     ],
-
-    # ═══════════ درخواست‌ها ═══════════
     ("شعر بگو", "یه شعر بگو", "شعر بخون"): [
-        "برای شعر بنویس `شعر` 📝",
-        "دستور `شعر` رو بزن 📝",
-        "یه شعر: `شعر` 📖",
-        "بزن `شعر` ببین 📚",
-        "شعر: دستور `شعر` 🎭",
+        "برای شعر بنویس `شعر` 📝", "دستور `شعر` رو بزن 📝", "یه شعر: `شعر` 📖", "بزن `شعر` ببین 📚", "شعر: دستور `شعر` 🎭",
     ],
     ("جوک بگو", "جک بگو", "بخندون منو"): [
-        "برای جک بنویس `جک` 😂",
-        "دستور `جک` رو بزن 😄",
-        "جک: `جک` 🤣",
-        "بزن `جک` بخندیم 😆",
-        "جک بگو: `جک` 😂",
+        "برای جک بنویس `جک` 😂", "دستور `جک` رو بزن 😄", "جک: `جک` 🤣", "بزن `جک` بخندیم 😆", "جک بگو: `جک` 😂",
     ],
     ("فال بگو", "فال حافظ", "فال بگیر"): [
-        "برای فال بنویس `فال` 🔮",
-        "دستور `فال` رو بزن 🔮",
-        "فال: `فال` 🍀",
-        "بزن `فال` ببین 🔮",
-        "فال حافظ: `فال` 📿",
+        "برای فال بنویس `فال` 🔮", "دستور `فال` رو بزن 🔮", "فال: `فال` 🍀", "بزن `فال` ببین 🔮", "فال حافظ: `فال` 📿",
     ],
     ("چالش بده", "چالش بگو", "چالش بده بهم"): [
-        "برای چالش بنویس `چالش` 🎯",
-        "دستور `چالش` رو بزن 🎲",
-        "چالش: `چالش` 🔥",
-        "بزن `چالش` 🎯",
-        "چالش: `چالش` 💪",
+        "برای چالش بنویس `چالش` 🎯", "دستور `چالش` رو بزن 🎲", "چالش: `چالش` 🔥", "بزن `چالش` 🎯", "چالش: `چالش` 💪",
     ],
-
-    # ═══════════ سوالات غذایی ═══════════
     ("چی بخورم", "چی درست کنم", "چی بپزم"): [
-        "پیتزا؟ 🍕",
-        "قورمه سبزی؟ 🍲",
-        "چلوکباب؟ 🍖",
-        "ماکارونی؟ 🍝",
-        "کباب؟ 🍢",
+        "پیتزا؟ 🍕", "قورمه سبزی؟ 🍲", "چلوکباب؟ 🍖", "ماکارونی؟ 🍝", "کباب؟ 🍢",
     ],
     ("چی می‌خوری", "چی می‌خوری تو"): [
-        "من نمی‌خورم 😅",
-        "من رباتم 🤖",
-        "تو چی می‌خوری؟ 😋",
-        "غذای خوب 🍕",
-        "قورمه سبزی 🍲",
+        "من نمی‌خورم 😅", "من رباتم 🤖", "تو چی می‌خوری؟ 😋", "غذای خوب 🍕", "قورمه سبزی 🍲",
     ],
-
-    # ═══════════ دعا و خدا ═══════════
     ("یا خدا", "خدایا", "الهی", "به خدا"): [
-        "آمین 🙏",
-        "خدا بزرگه 🌟",
-        "الهی 🙏",
-        "خدا کمکت کنه 💚",
-        "توکل به خدا 🤲",
+        "آمین 🙏", "خدا بزرگه 🌟", "الهی 🙏", "خدا کمکت کنه 💚", "توکل به خدا 🤲",
     ],
     ("خدا حفظت کنه", "خدا حفظت", "خدا نگهت داره"): [
-        "خدا تو رو هم حفظ کنه 🌹",
-        "الهی آمین 🙏",
-        "ممنون 💚",
-        "خدا نگهت داره 🌟",
-        "لطف داری 💐",
+        "خدا تو رو هم حفظ کنه 🌹", "الهی آمین 🙏", "ممنون 💚", "خدا نگهت داره 🌟", "لطف داری 💐",
     ],
-
-    # ═══════════ هوا ═══════════
     ("هوا چطوره", "آب و هوا", "هوا سرده", "هوا گرمه"): [
-        "سرد یا گرم؟ ❄️🔥",
-        "بارونیا؟ ☔",
-        "آفتابیه؟ ☀️",
-        "ابرایه؟ ☁️",
-        "برفی؟ ❄️",
+        "سرد یا گرم؟ ❄️🔥", "بارونیا؟ ☔", "آفتابیه؟ ☀️", "ابرایه؟ ☁️", "برفی؟ ❄️",
     ],
-
-    # ═══════════ حالت‌های روحی ═══════════
     ("بهترینم", "خوبم", "عالیم", "خوشحالم الان"): [
-        "چه خوب 🎉",
-        "همیشه همینطور باشی ✨",
-        "مرسی که خوبی 💚",
-        "آفرین 🌹",
-        "خوشحالم که خوبی 💖",
+        "چه خوب 🎉", "همیشه همینطور باشی ✨", "مرسی که خوبی 💚", "آفرین 🌹", "خوشحالم که خوبی 💖",
     ],
     ("بدحالم", "حالم بده", "حالم خوب نیست", "داغونم"): [
-        "چی شده؟ 🥺",
-        "خدا کمکت کنه 🙏",
-        "آروم باش 💚",
-        "بگو چی شده 🌹",
-        "من کنارتم 🤗",
+        "چی شده؟ 🥺", "خدا کمکت کنه 🙏", "آروم باش 💚", "بگو چی شده 🌹", "من کنارتم 🤗",
     ],
-
-    # ═══════════ درباره ربات ═══════════
     ("چیکار می‌تونی بکنی", "چیکارا می‌کنی", "قابلیت‌هات چیه"): [
-        "برای دیدن قابلیت‌ها بنویس `قابلیت ها` 📖",
-        "دستور `راهنما` رو بزن 📚",
-        "همه چی می‌تونم بکنم 🌟",
-        "بزن `قابلیت های ربات` 📖",
-        "بگو `راهنما` ببینی 📚",
+        "برای دیدن قابلیت‌ها بنویس `قابلیت ها` 📖", "دستور `راهنما` رو بزن 📚", "همه چی می‌تونم بکنم 🌟", "بزن `قابلیت های ربات` 📖", "بگو `راهنما` ببینی 📚",
     ],
     ("خوشم میاد ازت", "دوست دارم ربات", "تو خوبی"): [
-        "مرسی عزیز 💖",
-        "لطف داری 🌹",
-        "منم دوستت دارم 💕",
-        "خوشحالم 🥰",
-        "ممنون که هستی 💚",
+        "مرسی عزیز 💖", "لطف داری 🌹", "منم دوستت دارم 💕", "خوشحالم 🥰", "ممنون که هستی 💚",
     ],
-
-    # ═══════════ کلمات تصادفی مفید ═══════════
     ("به‌به", "به به", "چه عجب"): [
-        "به به 🌟",
-        "چه عجب 🥰",
-        "خوش اومدی 🌹",
-        "سلام علیک 💐",
-        "جونم 💖",
+        "به به 🌟", "چه عجب 🥰", "خوش اومدی 🌹", "سلام علیک 💐", "جونم 💖",
     ],
     ("ای جان", "جان جان"): [
-        "ای جان 💕",
-        "جونم 🥰",
-        "عزیزم 🌹",
-        "قربونت 💗",
-        "دل من 💖",
+        "ای جان 💕", "جونم 🥰", "عزیزم 🌹", "قربونت 💗", "دل من 💖",
     ],
     ("دلم می‌خواد", "دلم میخواد"): [
-        "چی دلت می‌خواد؟ 💭",
-        "بگو دلت چی می‌خواد 🥰",
-        "دلت چی میگه؟ 💗",
-        "می‌تونم برات کاری کنم؟ 🤝",
-        "بگو بشنوم 💐",
+        "چی دلت می‌خواد؟ 💭", "بگو دلت چی می‌خواد 🥰", "دلت چی میگه؟ 💗", "می‌تونم برات کاری کنم؟ 🤝", "بگو بشنوم 💐",
     ],
     ("اهل کجایی", "کجایی هستی", "اهل کجا"): [
-        "من هیچ‌جا نیستم 🤖",
-        "من تو گوشی توام 📱",
-        "من اهل دنیای دیجیتالم 💫",
-        "من همه‌جام 🌍",
-        "من اهل اینترنتم 🌐",
+        "من هیچ‌جا نیستم 🤖", "من تو گوشی توام 📱", "من اهل دنیای دیجیتالم 💫", "من همه‌جام 🌍", "من اهل اینترنتم 🌐",
     ],
 }
 
-# ساخت لیست flat برای شمارش
 TALKATIVE_PHRASES = []
 for _keys, _reps in TALKATIVE_MAP.items():
     TALKATIVE_PHRASES.extend(_reps)
 
+# کش آماده از کلیدواژه‌ها برای سرعت بیشتر
+_TALKATIVE_FLAT = []
+for _keys, _reps in TALKATIVE_MAP.items():
+    for _k in _keys:
+        _TALKATIVE_FLAT.append((_k.lower(), _reps))
+_TALKATIVE_FLAT.sort(key=lambda x: -len(x[0]))
+
+
 def get_talkative_reply(text):
-    """تشخیص هوشمند - اگه کلیدواژه‌ای تو پیام بود، پاسخ می‌ده"""
     if not text: return None
     t = text.strip().lower()
     if not t: return None
-    
-    # تقسیم به کلمات (با جداکننده‌های فارسی)
     words = [w.strip() for w in re.split(r'[\s,،.!?؟:;()\[\]{}«»\-\u200c]+', t) if w.strip()]
     if not words: return None
-    
-    # لیست کلیدواژه‌ها رو از بزرگ به کوچیک مرتب کن (اولویت به طولانی‌ترها)
-    all_items = []
-    for keys, reps in TALKATIVE_MAP.items():
-        for k in keys:
-            all_items.append((k.lower(), reps))
-    all_items.sort(key=lambda x: -len(x[0]))
-    
-    for kw, reps in all_items:
-        # اگه kw چندکلمه‌ای بود، تو کل متن چک کن
+    words_set = set(words)
+    for kw, reps in _TALKATIVE_FLAT:
         if ' ' in kw:
-            # برای اطمینان، با فاصله دقیق یا نقطه‌گذاری چک کن
-            kw_parts = [p for p in re.split(r'\s+', kw) if p]
-            # چک کن همه کلمه‌های کلیدواژه تو متن موجود باشن (پشت سر هم)
             if kw in t: return reps
         else:
-            # تک‌کلمه: چک دقیق تو لیست کلمات
-            if kw in words: return reps
+            if kw in words_set: return reps
     return None
 
 
@@ -890,9 +585,8 @@ async def get_user_info(chat_id, user_id, force=False):
                     role = "ادمین"
             info["role"] = role
             username_cache[key] = info
-            username_cache_ttl[key] = now + 600
+            username_cache_ttl[key] = now + 3600
             save_known_user(user_id, info.get("name"), info.get("username"))
-            save_data(bot_data)
     except Exception as e:
         print(f"⚠️ get_user_info: {e}", flush=True)
     return info
@@ -1070,7 +764,7 @@ async def send_long_message(chat_id, text, reply_to_message_id=None):
             result = await bot.send_message(**kwargs)
             if i == 0: first_result = result
             if i < len(parts) - 1:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.3)
         except Exception as e:
             print(f"❌ SEND PART {i}: {e}", flush=True)
     return first_result
@@ -1246,16 +940,6 @@ def is_gif(message):
         mt = str(getattr(message, 'type', '') or getattr(message, 'message_type', '')).lower()
         return 'gif' in mt or 'animation' in mt
     except: return False
-
-
-def is_edited_message(message):
-    """تشخیص پیام ویرایش‌شده"""
-    try:
-        for attr in ['is_edited', 'edited', 'is_edit', 'edit_date', 'edited_at', 'editDate', 'editedAt']:
-            v = getattr(message, attr, None)
-            if v: return True
-    except: pass
-    return False
 
 
 async def get_chat_name(chat_id):
@@ -1569,7 +1253,7 @@ def load_data():
 
 def save_data(data, force=False):
     save_counter["data"] += 1
-    if not force and save_counter["data"] % 3 != 0: return
+    if not force and save_counter["data"] % 5 != 0: return
     for path in DATA_PATHS:
         try:
             dn = os.path.dirname(path)
@@ -1606,21 +1290,17 @@ async def cleanup_task():
             keys = [k for k, v in text_dedup.items() if v < cutoff]
             for k in keys:
                 if k in text_dedup: del text_dedup[k]
-            role_refresh_counter = bot_data.get("_role_refresh", 0)
-            if now - role_refresh_counter > 300:
-                username_cache.clear()
-                username_cache_ttl.clear()
-                bot_data["_role_refresh"] = now
-            expired = [k for k, v in username_cache_ttl.items() if now > v]
-            for k in expired:
-                if k in username_cache: del username_cache[k]
-                if k in username_cache_ttl: del username_cache_ttl[k]
-            if len(processed_messages) > 1000:
-                items = list(processed_messages.items())
-                keep = dict(items[-500:])
-                processed_messages.clear()
-                processed_messages.update(keep)
-            print(f"🧹 Cleanup done", flush=True)
+            # پاکسازی entries منقضی شده (نه کل کش)
+            expired_roles = [k for k, v in username_cache_ttl.items() if now > v]
+            for k in expired_roles:
+                username_cache.pop(k, None)
+                username_cache_ttl.pop(k, None)
+            # پاکسازی processed_messages بزرگ
+            if len(processed_messages) > 2000:
+                keys = list(processed_messages.keys())
+                for k in keys[:-1000]:
+                    processed_messages.pop(k, None)
+            print(f"🧹 Cleanup done | proc_msg={len(processed_messages)} | cache={len(username_cache)}", flush=True)
         except Exception as e:
             print(f"⚠️ cleanup: {e}", flush=True)
 
@@ -2108,141 +1788,89 @@ async def handle_slow_mode(chat_id, user_id, seconds, user_info):
 
 # ================== 🖊️ EDIT HANDLER ==================
 async def process_edited_message(message, chat_id, sender_id, raw_text, new_text):
-    """پردازش پیام ویرایش‌شده - قفل‌ها رو چک می‌کنه و در صورت لزوم پاک می‌کنه"""
     try:
-        if not is_group_chat(chat_id):
-            print(f"✏️ edit (پیوی - نادیده): {new_text!r}", flush=True)
-            return
-        if not bot_is_active:
-            return
-        
+        if not is_group_chat(chat_id): return
+        if not bot_is_active: return
         ui = await get_user_info(chat_id, sender_id)
         role = ui["role"]
         is_owner_group = (role == "مالک")
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner_group or is_special
-        
-        # مدیران رو چک نکن
-        if can_manage:
-            print(f"✏️ edit (مدیر - نادیده): {new_text!r}", flush=True)
-            return
-        
-        deleted = False
-        
-        # چک قفل گروه
+        if can_manage: return
         locked, _ = is_group_locked(chat_id)
         if locked:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 print(f"🗑️ edit: پاک شد (قفل گروه) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete locked: {e}", flush=True)
+            except: pass
             return
-        
-        # چک سکوت
         chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
         if sender_id in chat_mutes and time.time() < chat_mutes[sender_id]:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 print(f"🗑️ edit: پاک شد (سکوت) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete muted: {e}", flush=True)
+            except: pass
             return
-        
-        # چک فحش
         if settings.get("profanity", True):
             if contains_profanity(new_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    deleted = True
                     if settings.get("warning"):
                         await add_warning(chat_id, sender_id, "فحش (ویرایش)", user_info=ui)
                     print(f"🗑️ edit: پاک شد (فحش) | {new_text!r}", flush=True)
-                except Exception as e:
-                    print(f"⚠️ edit delete profanity: {e}", flush=True)
+                except: pass
                 return
-        
-        # چک فیلتر
         if settings.get("filter"):
             fl = ensure_list_dict(bot_data, "filtered_words", chat_id)
             if contains_filtered_word(new_text, fl):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    deleted = True
                     if settings.get("warning"):
                         await add_warning(chat_id, sender_id, "کلمه فیلترشده (ویرایش)", user_info=ui)
                     print(f"🗑️ edit: پاک شد (فیلتر) | {new_text!r}", flush=True)
-                except Exception as e:
-                    print(f"⚠️ edit delete filter: {e}", flush=True)
+                except: pass
                 return
-        
-        # چک لینک
         if settings.get("link") and contains_link(new_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "لینک (ویرایش)", user_info=ui)
                 print(f"🗑️ edit: پاک شد (لینک) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete link: {e}", flush=True)
+            except: pass
             return
-        
-        # چک هایپرلینک
         if settings.get("hyperlink") and contains_hyperlink(new_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "هایپرلینک (ویرایش)", user_info=ui)
                 print(f"🗑️ edit: پاک شد (هایپرلینک) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete hyperlink: {e}", flush=True)
+            except: pass
             return
-        
-        # چک آیدی
         if settings.get("id") and contains_id(new_text):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "آیدی (ویرایش)", user_info=ui)
                 print(f"🗑️ edit: پاک شد (آیدی) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete id: {e}", flush=True)
+            except: pass
             return
-        
-        # چک فوروارد
         if settings.get("forward", False) and is_forwarded(message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "فوروارد (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (فوروارد) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete forward: {e}", flush=True)
+            except: pass
             return
-        
-        # چک گیف
         if settings.get("gif", False) and is_gif(message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                deleted = True
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "گیف (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (گیف) | {new_text!r}", flush=True)
-            except Exception as e:
-                print(f"⚠️ edit delete gif: {e}", flush=True)
+            except: pass
             return
-        
-        print(f"✏️ ویرایش چک شد - پاک نشد | {new_text!r}", flush=True)
+        print(f"✏️ ویرایش چک شد (بدون تخلف) | {new_text!r}", flush=True)
     except Exception as e:
         print(f"❌ process_edited_message: {e}", flush=True)
-        try: traceback.print_exc()
-        except: pass
 
 
 # ================== MAIN HANDLER ==================
@@ -2257,28 +1885,18 @@ async def handle_message(bot, message):
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
 
-        # 🖊️ چک ویرایش (روش ۱: is_edited flag)
-        is_edit = is_edited_message(message)
-        if is_edit:
-            await process_edited_message(message, chat_id, sender_id, raw_text, raw_text)
-            return
-
-        # 🖊️ چک ویرایش (روش ۲: همون msg_id با متن متفاوت)
-        # این مهمه! چون بعضی وقتا Rubika پیام ویرایش‌شده رو با همون ID می‌فرسته
-        prev_text = processed_messages.get(msg_id)
+        # 🖊️ تشخیص ویرایش (فقط با مقایسه متن - روش دقیق)
+        pm_key = f"{chat_id}:{msg_id}"
+        prev_text = processed_messages.get(pm_key)
         if prev_text is not None:
             if prev_text != raw_text:
-                # متن عوض شده → ویرایشه!
-                processed_messages[msg_id] = raw_text
-                print(f"✏️ [edit-detect] msg_id={msg_id} | {prev_text!r} → {raw_text!r}", flush=True)
+                processed_messages[pm_key] = raw_text
+                print(f"✏️ [edit] {pm_key} | {prev_text!r} → {raw_text!r}", flush=True)
                 await process_edited_message(message, chat_id, sender_id, prev_text, raw_text)
                 return
             else:
-                # پیام کاملا تکراری
                 return
-        
-        # ذخیره متن پیام برای تشخیص ویرایش بعدی
-        processed_messages[msg_id] = raw_text
+        processed_messages[pm_key] = raw_text
 
         aux = getattr(message, 'aux_data', None) or getattr(message, 'auxData', None)
         button_id = None
@@ -2303,7 +1921,6 @@ async def handle_message(bot, message):
             save_cache(message_cache)
 
         ct = time.time()
-
         is_owner_check = (str(sender_id) == OWNER_ID)
         if not is_owner_check:
             dedup_key = f"{chat_id}:{sender_id}:{raw_text}"
@@ -2477,6 +2094,69 @@ async def handle_message(bot, message):
         # ============ گروه ============
         if not is_group_chat(chat_id): return
 
+        # 💬 سخنگو - FAST PATH (قبل از هر API call)
+        talk_reply = get_talkative_reply(raw_text)
+        if talk_reply:
+            if is_talkative_enabled(chat_id):
+                try:
+                    reply = random.choice(talk_reply)
+                    await bot.send_message(chat_id=chat_id, text=reply, reply_to_message_id=message.message_id)
+                except Exception as e:
+                    print(f"⚠️ talkative: {e}", flush=True)
+            return
+
+        # 🎨 فونت - FAST PATH
+        font_match = re.match(r"^(?:فونت|فوت)\s+([\s\S]+)$", raw_text.strip())
+        if font_match:
+            font_text = font_match.group(1).strip()
+            if font_text:
+                if settings.get("profanity", True) and contains_profanity(font_text):
+                    try:
+                        await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    except: pass
+                    return
+                if settings.get("filter"):
+                    fl_check = ensure_list_dict(bot_data, "filtered_words", chat_id)
+                    if contains_filtered_word(font_text, fl_check):
+                        try:
+                            await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                        except: pass
+                        return
+                try:
+                    font_msg = build_font_message(font_text)
+                    if font_msg:
+                        await send_long_message(chat_id, font_msg, reply_to_message_id=message.message_id)
+                except Exception as e:
+                    print(f"❌ font: {e}", flush=True)
+            return
+
+        # 🎨 راهنمای فونت
+        if is_command(clean_text, "فونت", "فوت"):
+            try:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
+                    text=("🎨 **فونت‌ساز FLUXBOT**\n\n"
+                        "📝 **روش استفاده:**\n"
+                        "├ `فونت [متن]`\n"
+                        "└ `فوت [متن]`\n\n"
+                        "💡 **مثال:**\n"
+                        "├ `فونت سلام`\n"
+                        "├ `فوت Hello`\n"
+                        "└ `فونت Python 2024`\n\n"
+                        "🌟 بالای ۲۰ استایل (فارسی + انگلیسی)\n\n"
+                        "⚡ **FLUXBOT**"))
+            except: pass
+            return
+
+        # 🎯 چالش - FAST PATH
+        if is_command(clean_text, "چالش"):
+            try:
+                challenge_msg = build_challenge_message()
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=challenge_msg)
+            except Exception as e:
+                print(f"❌ challenge: {e}", flush=True)
+            return
+
+        # از اینجا به بعد نیاز به user info داریم
         ui = await get_user_info(chat_id, sender_id)
         role = ui["role"]
         disp = format_user_display(ui, sender_id)
@@ -2535,80 +2215,6 @@ async def handle_message(bot, message):
                 except Exception as e:
                     print(f"⚠️ delete spam: {e}", flush=True)
                 return
-
-        # 🎨 دستور فونت / فوت
-        font_match = re.match(r"^(?:فونت|فوت)\s+([\s\S]+)$", raw_text.strip())
-        if font_match:
-            font_text = font_match.group(1).strip()
-            if not font_text:
-                try:
-                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
-                        text="⚠️ **متن رو وارد کن!**\n\n📝 مثال:\n`فونت سلام`\n`فوت Hello`")
-                except: pass
-                return
-            if settings.get("profanity", True) and contains_profanity(font_text):
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
-                        await add_warning(chat_id, sender_id, "فحش در دستور فونت", user_info=ui)
-                except: pass
-                return
-            if settings.get("filter"):
-                fl_check = ensure_list_dict(bot_data, "filtered_words", chat_id)
-                if contains_filtered_word(font_text, fl_check):
-                    try:
-                        await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                        if settings.get("warning"):
-                            await add_warning(chat_id, sender_id, "کلمه فیلترشده در دستور", user_info=ui)
-                    except: pass
-                    return
-            try:
-                font_msg = build_font_message(font_text)
-                if font_msg:
-                    await send_long_message(chat_id, font_msg, reply_to_message_id=message.message_id)
-            except Exception as e:
-                print(f"❌ font: {e}", flush=True)
-                try:
-                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
-                        text="⚠️ خطا در ساخت فونت. متن ساده‌تری امتحان کن.")
-                except: pass
-            return
-
-        if is_command(clean_text, "فونت", "فوت"):
-            try:
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
-                    text=("🎨 **فونت‌ساز FLUXBOT**\n\n"
-                        "📝 **روش استفاده:**\n"
-                        "├ `فونت [متن]`\n"
-                        "└ `فوت [متن]`\n\n"
-                        "💡 **مثال:**\n"
-                        "├ `فونت سلام`\n"
-                        "├ `فوت Hello`\n"
-                        "└ `فونت Python 2024`\n\n"
-                        "🌟 بالای ۲۰ استایل (فارسی + انگلیسی)\n\n"
-                        "⚡ **FLUXBOT**"))
-            except: pass
-            return
-
-        # 🎯 دستور چالش
-        if is_command(clean_text, "چالش"):
-            try:
-                challenge_msg = build_challenge_message()
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=challenge_msg)
-            except Exception as e:
-                print(f"❌ challenge: {e}", flush=True)
-            return
-
-        # 💬 سخنگو - پاسخ کلیدواژه‌ای
-        talk_reply = get_talkative_reply(raw_text)
-        if talk_reply:
-            if is_talkative_enabled(chat_id):
-                try:
-                    reply = random.choice(talk_reply)
-                    await bot.send_message(chat_id=chat_id, text=reply, reply_to_message_id=message.message_id)
-                except Exception as e:
-                    print(f"⚠️ talkative: {e}", flush=True)
-            return
 
         # 🔄 قفل دوکلمه‌ای - سخنگو
         res = match_two_word_cmd(clean_text, "سخنگو")
@@ -3544,7 +3150,7 @@ async def handle_message(bot, message):
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
-    print(f"💬 TALKATIVE KEYWORDS: {len(TALKATIVE_MAP)} | TOTAL REPLIES: {len(TALKATIVE_PHRASES)}", flush=True)
+    print(f"💬 TALKATIVE KEYWORDS: {len(TALKATIVE_MAP)} | REPLIES: {len(TALKATIVE_PHRASES)}", flush=True)
     try: asyncio.create_task(cleanup_task())
     except: pass
     try: asyncio.create_task(group_cleanup_task())
