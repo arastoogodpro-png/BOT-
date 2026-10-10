@@ -99,12 +99,12 @@ def font_bold_italic(t):
     return _map_unicode(t, 0x1D468, 0x1D482)
 
 
-def font_script(t):
-    return _map_unicode(t, 0x1D49C, 0x1D4B6)
+def font_bold_script(t):
+    return _map_unicode(t, 0x1D4D0, 0x1D4EA)
 
 
-def font_fraktur(t):
-    return _map_unicode(t, 0x1D504, 0x1D51E)
+def font_bold_fraktur(t):
+    return _map_unicode(t, 0x1D56C, 0x1D586)
 
 
 def font_sans(t):
@@ -151,7 +151,6 @@ def font_small_caps(t):
     return ''.join(SMALL_CAPS_MAP.get(ch, ch) for ch in t)
 
 
-# --- استایل‌های تزئینی (برای فارسی هم کار می‌کنن) ---
 def deco_strike(t):
     return ''.join(ch + '\u0336' for ch in t)
 
@@ -177,7 +176,6 @@ def deco_dot_above(t):
 
 
 def build_font_message(text):
-    """ساخت پیام فونت برای متن (فارسی/انگلیسی/ترکیبی)"""
     text = text.strip()
     if not text:
         return None
@@ -189,14 +187,13 @@ def build_font_message(text):
     
     sections = []
     
-    # بخش ۱: استایل‌های لاتین (فقط اگه متن لاتین داشته باشه)
     if has_en:
         sections.append(("🇬🇧 **استایل‌های انگلیسی:**", [
             ("1️⃣ بولد", font_bold(text)),
             ("2️⃣ ایتالیک", font_italic(text)),
             ("3️⃣ بولد ایتالیک", font_bold_italic(text)),
-            ("4️⃣ اسکریپت", font_script(text)),
-            ("5️⃣ گوتیک", font_fraktur(text)),
+            ("4️⃣ اسکریپت", font_bold_script(text)),
+            ("5️⃣ گوتیک", font_bold_fraktur(text)),
             ("6️⃣ ساده", font_sans(text)),
             ("7️⃣ ساده بولد", font_sans_bold(text)),
             ("8️⃣ مونو", font_mono(text)),
@@ -204,7 +201,6 @@ def build_font_message(text):
             ("🔟 کوچک", font_small_caps(text)),
         ]))
     
-    # بخش ۲: استایل‌های تزئینی (برای فارسی و انگلیسی هر دو کار می‌کنن)
     sections.append(("✨ **استایل‌های تزئینی:**", [
         ("✏️ خط‌خورده", deco_strike(text)),
         ("✏️ زیرخط", deco_underline(text)),
@@ -285,7 +281,6 @@ CHALLENGE_POLLS = [
 
 
 def build_challenge_message():
-    """انتخاب تصادفی: 2/3 متنی، 1/3 نظرسنجی"""
     mode = random.choice(["text", "text", "poll"])
     
     if mode == "text":
@@ -296,7 +291,7 @@ def build_challenge_message():
             "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
             f"{challenge}\n\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            "💡 **نظرت رو بگو!**\n\n"
+            "💡 **نظرت رو همینجا بگو!**\n\n"
             "⚡ **FLUXBOT**"
         )
     else:
@@ -309,7 +304,7 @@ def build_challenge_message():
             f"❓ **{question}**\n\n"
             f"{opts}\n\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            "💬 **شماره گزینه رو بفرست!**\n\n"
+            "💡 **نظرت رو همینجا بگو!**\n\n"
             "⚡ **FLUXBOT**"
         )
 
@@ -1038,7 +1033,7 @@ def get_features_text():
         "   📖 قابلیت‌های کامل\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎨 **فونت‌ساز (جدید!)**\n"
+        "🎨 **فونت‌ساز**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 📝 دستور: `فونت [متن]`\n"
         "├ 📝 یا: `فوت [متن]`\n"
@@ -1047,7 +1042,7 @@ def get_features_text():
         "├ ✿ استایل‌های تزئینی (گل، ستاره، قاب و...)\n"
         "└ 💡 فقط در گروه کار می‌کنه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎯 **چالش روزانه (جدید!)**\n"
+        "🎯 **چالش روزانه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 📌 دستور: `چالش`\n"
         "├ 🎲 چالش تصادفی (متنی یا نظرسنجی)\n"
@@ -2073,12 +2068,35 @@ async def handle_message(bot, message):
                 except: pass
             return
 
+        # 🎨 راهنمای فونت (فقط کلمه فونت/فوت بدون متن)
+        if is_command(clean_text, "فونت", "فوت"):
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    reply_to_message_id=message.message_id,
+                    text=(
+                        "🎨 **فونت‌ساز FLUXBOT**\n\n"
+                        "📝 **روش استفاده:**\n"
+                        "├ `فونت [متن]`\n"
+                        "└ `فوت [متن]`\n\n"
+                        "💡 **مثال:**\n"
+                        "├ `فونت سلام`\n"
+                        "├ `فوت Hello`\n"
+                        "└ `فونت Python 2024`\n\n"
+                        "🌟 بالای ۲۰ استایل (فارسی + انگلیسی)\n\n"
+                        "⚡ **FLUXBOT**"
+                    )
+                )
+            except: pass
+            return
+
         # 🎯 دستور چالش
         if is_command(clean_text, "چالش"):
             try:
                 challenge_msg = build_challenge_message()
                 await bot.send_message(
                     chat_id=chat_id,
+                    reply_to_message_id=message.message_id,
                     text=challenge_msg
                 )
             except Exception as e:
