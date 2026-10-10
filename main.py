@@ -183,12 +183,6 @@ TALKATIVE_MAP = {
     ("کمکم کن", "کمک کن", "کمکی", "کمک می‌خوام"): [
         "چطور کمکت کنم؟ 💪", "در خدمتم 🤝", "بگو چیکار کنم ⚡", "امر کن 👑", "چی لازم داری؟ 🎯",
     ],
-    ("ساعت چنده", "ساعت چند", "زمان چیه", "ساعت چیه"): [
-        "برای ساعت بنویس `ساعت` ⏰", "بزودی می‌گم 🕐", "برای ساعت `ساعت` بزن ⏰", "زمان مهمه ⏳", "دستور `ساعت` رو بزن 🕐",
-    ],
-    ("امروز چندمه", "تاریخ امروز", "چندم ماهه", "تاریخ چیه"): [
-        "برای تاریخ بنویس `ساعت` 📅", "دستور `ساعت` رو بزن 📅", "تاریخ دقیق: `ساعت` 📆", "زمان و تاریخ: `ساعت` 🗓️", "بزن `ساعت` ببین 📅",
-    ],
     ("بیکارم", "بیکار هستم", "حوصله ندارم", "حوصلم سر رفته"): [
         "بیا حرف بزنیم 🗣️", "بریم بازی کنیم 🎮", "بیا شوخی کنیم 😄", "چی می‌خوای بگی؟ 💬", "بیا سرگرمت کنم 🎉",
     ],
@@ -276,7 +270,6 @@ TALKATIVE_PHRASES = []
 for _keys, _reps in TALKATIVE_MAP.items():
     TALKATIVE_PHRASES.extend(_reps)
 
-# کش آماده از کلیدواژه‌ها برای سرعت بیشتر
 _TALKATIVE_FLAT = []
 for _keys, _reps in TALKATIVE_MAP.items():
     for _k in _keys:
@@ -842,61 +835,389 @@ PROFANITY_LIST = [
     "تخم سگ","مغز کیر","کص مغز","نناموس","بی حیا","لختی","برهنه","کیرمغز",
 ]
 
+# ============ ۲۰ جوک ============
 JOKES = [
     "به یارو میگن چرا زنتو میزنی؟ میگه چون عاشقشم! 😂",
     "رفتم دکتر گفتم آدم‌ها رو دوست ندارم! گفت پس چرا اومدی؟ گفتم تو که آدم نیستی! 😅",
     "به یارو میگن شغلت چیه؟ میگه بیکارم! میگن پس چطوری خرج می‌کنی؟ میگه آبروم رو می‌فروشم! 😂",
     "از یارو پرسیدن چرا زیر بارون وایسادی؟ گفت منتظرم یه قطره بیفته تا لیوانم پر شه! 🌧️",
+    "به یارو میگن چرا لباسات خیشه؟ میگه چون زیر بارون راه می‌رم! میگن چرا؟ میگه چون ماشین ندارم! 🚗",
+    "یه بار یه مرد به زنش گفت: عزیزم من می‌رم سفر! زن گفت: کجا؟ مرد گفت: پیش مامانم! زن گفت: پس منم میام! 😂",
+    "به یارو میگن چرا نون نمی‌خوری؟ میگه رژیم دارم! میگن پس چرا شکلات می‌خوری؟ میگه چون شکلات رژیمی نیست! 🍫",
+    "از یارو پرسیدن چرا اینقد خوشحالی؟ گفت قبض آب نیومده! گفتن چرا؟ گفت چون آب نداریم! 💧",
+    "معلم به شاگرد گفت: چرا مشقت رو ننوشتی؟ شاگرد گفت: چون خودکار نداشتم! معلم گفت: پس چرا تو کلاس نشستی؟ شاگرد گفت: چون صندلی بود! 🪑",
+    "به یارو میگن چرا گوشیت رو خاموش کردی؟ میگه باتری نداشت! میگن پس چرا شارژ نکردی؟ میگه برق نداشتیم! ⚡",
+    "یه بار یه ربات به یه ربات دیگه گفت: سلام! اون گفت: من تو رو نمی‌شناسم! اولی گفت: منم تو رو نمی‌شناسم، ولی سلام دادم! 🤖",
+    "به یارو میگن چرا اینقد لاغری؟ میگه پول غذا ندارم! میگن پس چرا اینقد چاقی؟ میگه شوخیت گرفته؟ 🍔",
+    "از یارو پرسیدن عشق چیه؟ گفت: عشق یعنی زنت بگه برو نون بگیر، تو بری پیتزا بخری! 🍕",
+    "به یارو میگن چرا دوچرخه نداری؟ میگه پول ندارم! میگن پس چرا ماشین داری؟ میگه وام گرفتم! 🚴",
+    "یه بار یه پیرمرد رفت مطب دکتر، دکتر گفت: چه خبر؟ پیرمرد گفت: از وقتی زنم مرده، بهترم! 😂",
+    "به یارو میگن چرا اینقد ساکتی؟ میگه دارم فکر می‌کنم! میگن به چی؟ میگه به اینکه چرا اینقد ساکتم! 🤔",
+    "از یارو پرسیدن چرا خوابت میاد؟ گفت دیشب کم خوابیدم! گفتن چرا؟ گفت چون زیاد خوابیدم! 😴",
+    "به یارو میگن چرا کفشت پاره‌ست؟ میگه چون پول کفش ندارم! میگن پس چرا شلوارت جدیده؟ میگه شلوارم هدیه بوده! 👕",
+    "یه بار یه کاربر به ربات گفت یه جوک بگو، ربات گفت: تو خودت یه جوکی! 😂",
+    "از یارو پرسیدن چرا دندونات زرده؟ گفت چون سیگار می‌کشم! گفتن چرا سیگار می‌کشی؟ گفت چون دندونام زرده! 🚬",
 ]
 
+# ============ ۲۰ ضرب‌المثل ============
 PROVERBS = [
     "آب که از سر گذشت، چه یک وجب چه صد وجب. 🌊",
     "از این ستون به آن ستون فرج است. 🕌",
     "از تو حرکت، از خدا برکت. 🙏",
     "اسب را که بردی، لگامش را هم ببر. 🐴",
+    "با یک گل بهار نمی‌شه. 🌸",
+    "با یک دست نمی‌شه دو تا هندونه برداشت. 🍉",
+    "تا نباشد چیزکی، مردم نگویند چیزها. 🗣️",
+    "دو صد گفته چون نیم کردار نیست. 🎯",
+    "دیگ به سر، آش هم پشتش. 🍲",
+    "سنگ بزرگ علامت نزدن است. 🪨",
+    "شتر دیدی ندیدی. 🐪",
+    "کوه به کوه نمی‌رسه، آدم به آدم می‌رسه. ⛰️",
+    "گربه دستش به گوشت نمی‌رسه، میگه بو میده! 🐱",
+    "هر که بامش بیش، برفش بیشتر. ❄️",
+    "هر که طاووس خواهد، جور هندوستان کشد. 🦚",
+    "یکی به دو، ملا شدن چه آسون، آدم شدن چه مشکل! 🕌",
+    "از آنجا که بلند است، درش بیفت! 🏠",
+    "آشپز که دو تا شد، آش یا شور می‌شه یا بی‌نمک. 👨‍🍳",
+    "با پول می‌شه خر خرید، ولی نمی‌شه خر سوار شد! 💰",
+    "چاه مکن بهر کسی، اول خودت دوم کسی. 🕳️",
 ]
 
+# ============ ۲۰ دانستی ============
 TRIVIA = [
     "🐙 اختاپوس‌ها سه قلب دارند و خونشان آبی است.",
     "🍯 عسل هرگز فاسد نمی‌شود.",
     "🐘 فیل‌ها تنها پستانداری هستند که نمی‌توانند بپرند.",
     "🌙 ماه هر سال حدود ۳.۸ سانتی‌متر از زمین دور می‌شود.",
+    "🦈 کوسه‌ها قبل از دایناسورها روی زمین بودند.",
+    "🐜 مورچه‌ها می‌توانند ۵۰ برابر وزن خودشان بار حمل کنند.",
+    "🐝 زنبورها می‌توانند چهره انسان‌ها را تشخیص بدهند.",
+    "🦒 زرافه‌ها قلب بزرگی دارند که خون رو تا سرشون پمپ می‌کنه.",
+    "🐬 دلفین‌ها با نصف مغز می‌خوابند و با نصف دیگه بیدار می‌مونن.",
+    "🦋 پروانه‌ها با پاهایشان مزه غذا رو می‌فهمند.",
+    "🐳 نهنگ آبی بزرگترین حیوان روی زمینه.",
+    "🦁 شیرها تنها گربه‌سانانی هستند که در گروه زندگی می‌کنند.",
+    "🌳 درختان با همدیگر از طریق ریشه‌ها ارتباط برقرار می‌کنند.",
+    "🐢 لاک‌پشت‌ها می‌توانند تا ۱۵۰ سال عمر کنند.",
+    "🦅 عقاب‌ها می‌توانند تا ۳ کیلومتر دورتر رو ببینند.",
+    "🐍 مارها پلک ندارند، به همین خاطر همیشه چشماشون بازه.",
+    "🐨 کوآلاها ۲۲ ساعت در روز می‌خوابند.",
+    "🦜 طوطی‌ها می‌توانند بیش از ۱۰۰۰ کلمه یاد بگیرند.",
+    "🐺 گرگ‌ها تا آخر عمر با یه همسر می‌مونن.",
+    "☀️ خورشید ۹۹.۸٪ جرم منظومه شمسی رو تشکیل می‌ده.",
 ]
 
+# ============ ۲۰ فکت ============
 FACTS = [
     "🧠 مغز انسان ۲٪ وزن بدن را دارد اما ۲۰٪ انرژی مصرف می‌کند!",
     "🦷 مینای دندان سخت‌ترین ماده در بدن انسان است.",
     "👁️ چشم انسان می‌تواند حدود ۱۰ میلیون رنگ را تشخیص دهد.",
     "💤 انسان در طول عمرش حدود ۲۵ سال می‌خوابد!",
+    "🫀 قلب انسان روزانه حدود ۱۰۰,۰۰۰ بار می‌تپد.",
+    "🩸 خون انسان در ۲۰ ثانیه یک دور کامل تو بدن می‌چرخه.",
+    "🧬 DNA انسان ۹۹.۹٪ با شامپانزه‌ها یکسانه.",
+    "👃 بینی انسان می‌تواند ۱ تریلیون بو رو تشخیص بده.",
+    "💪 قوی‌ترین عضله بدن، عضله فک هست.",
+    "🦴 بدن نوزاد ۳۰۰ استخوان داره که با بزرگ شدن به ۲۰۶ می‌رسه.",
+    "🌡️ دمای بدن انسان در شب یک درجه کمتره.",
+    "💧 بدن انسان ۶۰٪ آب هست.",
+    "🧴 پوست انسان بزرگترین اندام بدن هست.",
+    "🫁 ریه راست سه لوب و ریه چپ دو لوب داره.",
+    "👂 گوش انسان می‌تواند ۳۴۰,۰۰۰ صدا رو تشخیص بده.",
+    "🍽️ معده انسان هر ۳-۴ روز مخاط خودش رو بازسازی می‌کنه.",
+    "🚶 انسان روزانه حدود ۶,۰۰۰ کلمه صحبت می‌کنه.",
+    "😴 انسان‌ها ۱/۳ عمرشون رو می‌خوابن.",
+    "🍔 روده انسان ۷.۵ متر طول داره.",
+    "🔥 بدن انسان روزانه به اندازه ۲۰۰۰ کالری انرژی می‌سوزونه.",
 ]
 
+# ============ ۲۰ پند و اندرز ============
 PNP = [
     "پند: با دلِ خودت روراست باش. 💚",
     "پند: هرگز قضاوت نکن تا خودت در اون موقعیت قرار نگیری. ⚖️",
     "پند: موفقیت یعنی بلند شدن بعد از هر زمین خوردن. 💪",
+    "پند: به کسی که پشت سرت حرف می‌زنه، پشتت رو نکن! 🙅",
+    "پند: عمر آن‌قدر کوتاهه که وقت نداریم ناراحت باشیم. 🕰️",
+    "پند: به هر کس اعتماد نکن، ولی به هیچ‌کس هم بی‌اعتماد نباش. 🤝",
+    "پند: کار امروز رو به فردا ننداز. 📅",
+    "پند: هر چه پیش آید خوش آید. 🌟",
+    "پند: دنیا محل گذر است، پس مهربان باش. 🌍",
+    "پند: با کسی که نمی‌فهمه بحث نکن. 🤐",
+    "پند: سلامتی بهترین نعمته. 🌿",
+    "پند: از سختی‌ها نترس، از تکرارشون بترس. 🔁",
+    "پند: به پدر و مادرت احترام بذار. 👨‍👩‍👧",
+    "پند: به کسی که دوستت داره، اذیت نکن. 💔",
+    "پند: غیبت نکن، آبروی مردم رو نبر. 🤐",
+    "پند: کمک به دیگران، شادی میاره. 🤲",
+    "پند: به جای پول، انسانیت رو ذخیره کن. 💎",
+    "پند: امروز بهترین روز زندگیته، قدرش رو بدون. ✨",
+    "پند: به دیگران امید بده، نه یأس. 🌈",
+    "پند: هر شب قبل خواب، برای فردا یه هدف تعیین کن. 🎯",
 ]
 
+# ============ ۲۰ شعر ============
 POEMS = [
     "دوش دیدم که ملائک در میخانه زدند / گل آدم بسرشتند و به پیمانه زدند. 🍷",
     "بنی آدم اعضای یک پیکرند / که در آفرینش ز یک گوهرند. 🤝",
     "توانا بود هر که دانا بود / ز دانش دل پیر برنا بود. 📚",
+    "الا ای طوطی گویای اسرار / مبادا خاموشی در بزم یار. 🦜",
+    "نه من از عشق تو دست برمی‌دارم / نه از سر عشقت می‌گذرم. 💕",
+    "به دریا بنگرم دریا تو بینم / به صحرا بنگرم صحرا تو بینم. 🌊",
+    "دلی دارم که از غم پر شده / ز عشق تو چه بی‌خبر شده. 💔",
+    "تو همچون آفتابی، من چو ذره / که بی تو هستی من بی‌بهره. ☀️",
+    "ای چشم و چراغ زندگی من / تو مونس دمی به دل‌نشینی من. 💫",
+    "شب است و چشم من در انتظارت / دل من بی‌قرار دیدارت. 🌙",
+    "من از روی تو گر دست بکشم / از جان و دل خود دست کشیدم. 🌹",
+    "همه گویند که عشق دیر می‌آید / ولی آمد، دیر آمد، بی‌امان آمد. 💕",
+    "دل من بی تو خونه خرابه / هیچکس تو این خونه نمی‌مونه. 🏚️",
+    "عمر رفت و عشق موند در دلم / یاد تو همیشه با من و دلم. 💭",
+    "بهار آمد، شکوفه داد درختم / ولی بی تو، باغ من شد خسته. 🌸",
+    "مرا عهدیست با جانان که تا جان در بدن دارم / هواداران کویش را چو جان خویشتن دارم. 💖",
+    "من اگر نیکم اگر بد، تو برو خود را باش / هر کسی آن درود عاقبت کار که کشت. 🌾",
+    "توانگرا! تو اگر داشته باشی، بده / ولی یادت نره که روزی میری و میای. 💰",
+    "دوش وقت سحر از غصه نجاتم دادند / واندر آن ظلمت شب آب حیاتم دادند. 🌙",
+    "ای که مرا خوانده‌ای، راه نشانم بده / پاسخ عاشقانه‌ات را، شعر بخونم بده. 🎶",
 ]
 
+# ============ ۲۰ فال ============
 FAL = [
     "🔮 **فال امروز:** روز خوبی در انتظارته! 🍀",
     "🔮 **فال امروز:** مراقب باش، یه نفر داره پشت سرت حرف می‌زنه. 🤫",
     "🔮 **فال امروز:** پول به دستت می‌رسه، ولی خرجش نکن! 💰",
+    "🔮 **فال امروز:** خبر خوشی بهت می‌رسه. 📰",
+    "🔮 **فال امروز:** یه سفر در انتظارته! ✈️",
+    "🔮 **فال امروز:** یه دوست قدیمی پیدات می‌کنه. 🤝",
+    "🔮 **فال امروز:** صبر کن، نتیجه می‌گیری. ⏳",
+    "🔮 **فال امروز:** یه فرصت خوب پیش میاد، از دستش نده. 🎯",
+    "🔮 **فال امروز:** مراقب سلامتی‌ات باش. 🌿",
+    "🔮 **فال امروز:** دل کسی رو نشکن، آبروی خودت میره. 💔",
+    "🔮 **فال امروز:** آرزو داری که برآورده می‌شه. ✨",
+    "🔮 **فال امروز:** یه مکالمه مهم داری، دقت کن. 💬",
+    "🔮 **فال امروز:** خوشحالیت نزدیکه. 😊",
+    "🔮 **فال امروز:** یه هدیه غیرمنتظره می‌گیری. 🎁",
+    "🔮 **فال امروز:** به کسی اعتماد نکن که بهت ثابت نکرده. 🚫",
+    "🔮 **فال امروز:** دل به دریا بزن، موفق می‌شی. 🌊",
+    "🔮 **فال امروز:** تو راه زندگی، یه تصمیم مهم داری. 🛤️",
+    "🔮 **فال امروز:** از اشتباهات گذشته درس بگیر. 📖",
+    "🔮 **فال امروز:** یه خبر خوب از طرف خانواده می‌رسه. 🏠",
+    "🔮 **فال امروز:** امروز برات یه روز خاصه، قدرش رو بدون. 🌟",
 ]
 
+# ============ ۲۰ شانس ============
 LUCK = [
     "🍀 **شانس امروز:** ۱۰ از ۱۰! فوق‌العاده‌ست!",
     "🍀 **شانس امروز:** ۹ از ۱۰! عالیه!",
     "🍀 **شانس امروز:** ۸ از ۱۰! خوبه!",
     "🍀 **شانس امروز:** ۷ از ۱۰! معمولیه.",
     "🍀 **شانس امروز:** ۵ از ۱۰! یه ذره ضعیفه.",
+    "🍀 **شانس امروز:** ۳ از ۱۰! مواظب باش.",
+    "🍀 **شانس امروز:** ۱ از ۱۰! امروز از خونه نرو!",
+    "🍀 **شانس امروز:** ۶ از ۱۰! متوسطه.",
+    "🍀 **شانس امروز:** ۱۰ از ۱۰! آفرین به تو!",
+    "🍀 **شانس امروز:** ۲ از ۱۰! یه ذره بدشانسی.",
+    "🍀 **شانس امروز:** ۴ از ۱۰! معمولی.",
+    "🍀 **شانس امروز:** ۹ از ۱۰! فوق‌العاده!",
+    "🍀 **شانس امروز:** ۷ از ۱۰! روز خوبی داری.",
+    "🍀 **شانس امروز:** ۵ از ۱۰! یه روز نرمال.",
+    "🍀 **شانس امروز:** ۸ از ۱۰! رو به بالا.",
+    "🍀 **شانس امروز:** ۱۰ از ۱۰! با شانس روز!",
+    "🍀 **شانس امروز:** ۶ از ۱۰! نه خوب نه بد.",
+    "🍀 **شانس امروز:** ۴ از ۱۰! یه ذره سختی.",
+    "🍀 **شانس امروز:** ۹ از ۱۰! بخت یارت!",
+    "🍀 **شانس امروز:** ۳ از ۱۰! حواست باشه.",
 ]
 
 
+# ============ 🎯 CHALLENGES ============
+CHALLENGE_TEXTS = [
+    "🎯 **چالش امروز:**\n\nبه ۳ نفر از اعضای این گروه یه تعریف **واقعی** بگو! 💬",
+    "🔥 **چالش:**\n\nآخرین باری که به کسی کمک کردی کِی بود؟ همینجا تعریف کن! 🤝",
+    "💪 **چالش ورزشی:**\n\nامروز ۲۰ تا اسکات برو، بعد بیا بگو انجام دادی! 🏋️",
+    "📖 **چالش کتاب:**\n\nاسم آخرین کتابی که خوندی چیه؟ یه جمله ازش بگو! 📚",
+    "🎵 **چالش موزیک:**\n\nآهنگی که این هفته بیشتر گوش دادی چیه؟ اسمش رو بگو! 🎧",
+    "😊 **چالش مهربونی:**\n\nامروز به یه نفر که نمی‌شناسیش لبخند بزن و اینجا بگو چه حسی داشت! 😄",
+    "🌟 **چالش رویا:**\n\nاگه یه آرزو داشتی، چی بود؟ اینجا بنویس! ✨",
+    "🍕 **چالش غذا:**\n\nغذای مورد علاقه‌ات چیه و چرا؟ 🍔",
+    "📸 **چالش خاطره:**\n\nقشنگ‌ترین خاطره‌ات از این هفته رو تعریف کن! 💭",
+    "🎮 **چالش گیم:**\n\nآخرین بازی‌ای که انجام دادی چی بود؟ نظرت درباره‌ش چیه؟ 🕹️",
+    "🎁 **چالش هدیه:**\n\nاگه می‌تونستی به یه نفر یه هدیه بدی، چی بود و به کی؟ 🎀",
+    "🏃 **چالش حرکت:**\n\nیه کار خوب و بدون انتظار برای کسی انجام بده و بعد بیا تعریف کن! 💫",
+    "🌸 **چالش احساس:**\n\nامروز چه حسی داری؟ با یه ایموجی توصیفش کن و بگو چرا! 💖",
+    "🧠 **چالش فکری:**\n\nآخرین باری که یه چیز جدید یاد گرفتی کِی بود؟ چی بود؟ 📖",
+    "🌙 **چالش شب:**\n\nقبل خواب به چی فکر می‌کنی؟ صادق باش! 💭",
+]
+
+CHALLENGE_POLLS = [
+    ("تا حالا به کسی دروغ گفتی؟", ["بله 😅", "نه 🙅", "شایدم 😏"]),
+    ("صبح‌ها زود بیدار می‌شی؟", ["بله ☀️", "نه 😴", "فقط جمعه‌ها ✨"]),
+    ("قهوه یا چای؟", ["قهوه ☕", "چای 🍵", "هیچکدوم ❌"]),
+    ("شب‌ها دیر می‌خوابی؟", ["بله 🌙", "نه 😇", "بعضی وقتا 😐"]),
+    ("اهل ورزشی؟", ["بله 💪", "نه 😅", "تازه شروع کردم 🚀"]),
+    ("فیلم ترجیح می‌دی یا سریال؟", ["فیلم 🎬", "سریال 📺", "هردو 🎭"]),
+    ("تا حالا از گروهی اخراج شدی؟", ["بله 😬", "نه 😎", "زیاد 😅"]),
+    ("گوشی اندروید داری یا آیفون؟", ["اندروید 🤖", "آیفون 🍎", "هردو 📱"]),
+    ("اهل سفر هستی؟", ["بله ✈️", "نه 🏠", "کم پیش میاد 🚗"]),
+    ("شیرینی دوست داری؟", ["عاشقشم 🍰", "نه 🚫", "کم می‌خورم 🍪"]),
+    ("شب یا روز؟", ["شب 🌙", "روز ☀️", "هردو 🎭"]),
+    ("آهنگ شاد یا غمگین؟", ["شاد 🎉", "غمگین 😢", "بستگی داره 🎵"]),
+]
+
+
+def build_challenge_message():
+    mode = random.choice(["text", "text", "poll"])
+    if mode == "text":
+        challenge = random.choice(CHALLENGE_TEXTS)
+        return (
+            "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+            "   🎯 **چالش FLUXBOT** 🎯\n"
+            "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+            f"{challenge}\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "💡 **نظرت رو همینجا بگو!**\n\n"
+            "⚡ **FLUXBOT**"
+        )
+    else:
+        question, options = random.choice(CHALLENGE_POLLS)
+        opts = "\n".join([f"{i+1}️⃣ {opt}" for i, opt in enumerate(options)])
+        return (
+            "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+            "   📊 **نظرسنجی FLUXBOT** 📊\n"
+            "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+            f"❓ **{question}**\n\n"
+            f"{opts}\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "💡 **نظرت رو همینجا بگو!**\n\n"
+            "⚡ **FLUXBOT**"
+        )
+
+
+# ================== 🎨 FONT SYSTEM ==================
+def _has_persian(text):
+    return bool(re.search(r'[\u0600-\u06FF]', text or ""))
+
+
+def _has_latin(text):
+    return bool(re.search(r'[A-Za-z]', text or ""))
+
+
+def _map_unicode(text, upper_start, lower_start, digit_start=None):
+    out = []
+    for ch in text:
+        if 'A' <= ch <= 'Z':
+            out.append(chr(upper_start + ord(ch) - ord('A')))
+        elif 'a' <= ch <= 'z':
+            out.append(chr(lower_start + ord(ch) - ord('a')))
+        elif digit_start is not None and '0' <= ch <= '9':
+            out.append(chr(digit_start + ord(ch) - ord('0')))
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def font_bold(t): return _map_unicode(t, 0x1D400, 0x1D41A, 0x1D7CE)
+def font_italic(t):
+    r = _map_unicode(t, 0x1D434, 0x1D44E)
+    return r.replace(chr(0x1D455), "ℎ")
+def font_bold_italic(t): return _map_unicode(t, 0x1D468, 0x1D482)
+def font_bold_script(t): return _map_unicode(t, 0x1D4D0, 0x1D4EA)
+def font_bold_fraktur(t): return _map_unicode(t, 0x1D56C, 0x1D586)
+def font_sans(t): return _map_unicode(t, 0x1D5A0, 0x1D5BA, 0x1D7E2)
+def font_sans_bold(t): return _map_unicode(t, 0x1D5D4, 0x1D5EE, 0x1D7EC)
+def font_mono(t): return _map_unicode(t, 0x1D670, 0x1D68A, 0x1D7F6)
+
+
+def font_fullwidth(t):
+    out = []
+    for ch in t:
+        if 'A' <= ch <= 'Z': out.append(chr(0xFF21 + ord(ch) - ord('A')))
+        elif 'a' <= ch <= 'z': out.append(chr(0xFF41 + ord(ch) - ord('a')))
+        elif '0' <= ch <= '9': out.append(chr(0xFF10 + ord(ch) - ord('0')))
+        elif ch == ' ': out.append('\u3000')
+        else: out.append(ch)
+    return ''.join(out)
+
+
+SMALL_CAPS_MAP = {
+    'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ',
+    'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+    'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+    'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ',
+    'A': 'ᴀ', 'B': 'ʙ', 'C': 'ᴄ', 'D': 'ᴅ', 'E': 'ᴇ', 'F': 'ꜰ', 'G': 'ɢ',
+    'H': 'ʜ', 'I': 'ɪ', 'J': 'ᴊ', 'K': 'ᴋ', 'L': 'ʟ', 'M': 'ᴍ', 'N': 'ɴ',
+    'O': 'ᴏ', 'P': 'ᴘ', 'Q': 'ǫ', 'R': 'ʀ', 'S': 's', 'T': 'ᴛ', 'U': 'ᴜ',
+    'V': 'ᴠ', 'W': 'ᴡ', 'X': 'x', 'Y': 'ʏ', 'Z': 'ᴢ',
+}
+
+
+def font_small_caps(t): return ''.join(SMALL_CAPS_MAP.get(ch, ch) for ch in t)
+def deco_strike(t): return ''.join(ch + '\u0336' for ch in t)
+def deco_underline(t): return ''.join(ch + '\u0332' for ch in t)
+def deco_overline(t): return ''.join(ch + '\u0305' for ch in t)
+def deco_double_under(t): return ''.join(ch + '\u0333' for ch in t)
+def deco_slash(t): return ''.join(ch + '\u0338' for ch in t)
+def deco_dot_above(t): return ''.join(ch + '\u0307' for ch in t)
+
+
+def build_font_message(text):
+    text = text.strip()
+    if not text: return None
+    if len(text) > 30: text = text[:30] + "…"
+    has_en = _has_latin(text)
+    sections = []
+    if has_en:
+        sections.append(("🇬🇧 **استایل‌های انگلیسی:**", [
+            ("1️⃣ بولد", font_bold(text)),
+            ("2️⃣ ایتالیک", font_italic(text)),
+            ("3️⃣ بولد ایتالیک", font_bold_italic(text)),
+            ("4️⃣ اسکریپت", font_bold_script(text)),
+            ("5️⃣ گوتیک", font_bold_fraktur(text)),
+            ("6️⃣ ساده", font_sans(text)),
+            ("7️⃣ ساده بولد", font_sans_bold(text)),
+            ("8️⃣ مونو", font_mono(text)),
+            ("9️⃣ پهن", font_fullwidth(text)),
+            ("🔟 کوچک", font_small_caps(text)),
+        ]))
+    sections.append(("✨ **استایل‌های تزئینی:**", [
+        ("✏️ خط‌خورده", deco_strike(text)),
+        ("✏️ زیرخط", deco_underline(text)),
+        ("✏️ بالای خط", deco_overline(text)),
+        ("✏️ دو زیرخط", deco_double_under(text)),
+        ("✏️ خط‌دار", deco_slash(text)),
+        ("✏️ نقطه‌دار", deco_dot_above(text)),
+        ("✿ گل‌دار", f"✿ {text} ✿"),
+        ("❁ برگ‌دار", f"❁ {text} ❁"),
+        ("【 قاب مربع 】", f"【 {text} 】"),
+        ("「 قاب گوشه 」", f"「 {text} 」"),
+        ("★彡 ستاره‌ای 彡★", f"★彡 {text} 彡★"),
+        ("༺ تیبت ༻", f"༺ {text} ༻"),
+        ("•° کلاسیک °•", f"•°¯`•• {text} ••´¯°•"),
+        ("▁▂▃ خط پایین ▃▂▁", f"▁▂▃ {text} ▃▂▁"),
+    ]))
+    lines = [
+        "╭─━━━━━━━━━━━━━━━━━━━─╮",
+        "   🎨 **فونت‌ساز FLUXBOT** 🎨",
+        "╰─━━━━━━━━━━━━━━━━━━━─╯",
+        "",
+        f"📝 **متن شما:** `{text}`",
+        "━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    for title, items in sections:
+        lines.append(title)
+        lines.append("")
+        for name, styled in items:
+            lines.append(f"**{name}:**")
+            lines.append(styled)
+            lines.append("")
+        lines.append("━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+    lines.append("💡 **روی هر خط، نگه دار و کپی کن!**")
+    lines.append("")
+    lines.append("⚡ **FLUXBOT**")
+    return "\n".join(lines)
+
+
+# ================== Utility (ادامه) ==================
 def clean_message(text):
     if not text: return ""
     text = re.sub(r"@\S+", "", text)
@@ -1070,7 +1391,7 @@ def get_features_text():
         "├ 📌 `فلکس بات` / `فلاکس بات` / `ربات`\n"
         "├ 📌 `سلام` / `خوبی` / `چه خبر`\n"
         "├ 📌 `ممنون` / `خداحافظ` / `شب بخیر`\n"
-        "├ 🎯 ۱۰۰+ کلیدواژه با ۵ پاسخ\n"
+        "├ 🎯 ۵۰+ کلیدواژه با ۵ پاسخ\n"
         "├ 🌟 پیش‌فرض: فعال\n"
         "├ 🟢 `سخنگو باز` / `باز سخنگو`\n"
         "├ 🔴 `سخنگو بسته` / `بسته سخنگو`\n"
@@ -1290,17 +1611,15 @@ async def cleanup_task():
             keys = [k for k, v in text_dedup.items() if v < cutoff]
             for k in keys:
                 if k in text_dedup: del text_dedup[k]
-            # پاکسازی entries منقضی شده (نه کل کش)
             expired_roles = [k for k, v in username_cache_ttl.items() if now > v]
             for k in expired_roles:
                 username_cache.pop(k, None)
                 username_cache_ttl.pop(k, None)
-            # پاکسازی processed_messages بزرگ
             if len(processed_messages) > 2000:
                 keys = list(processed_messages.keys())
                 for k in keys[:-1000]:
                     processed_messages.pop(k, None)
-            print(f"🧹 Cleanup done | proc_msg={len(processed_messages)} | cache={len(username_cache)}", flush=True)
+            print(f"🧹 Cleanup | proc_msg={len(processed_messages)} | cache={len(username_cache)}", flush=True)
         except Exception as e:
             print(f"⚠️ cleanup: {e}", flush=True)
 
@@ -1333,7 +1652,7 @@ async def group_cleanup_task():
                 for gid, _ in dead:
                     group_info_cache.pop(gid, None)
                     group_info_cache_ttl.pop(gid, None)
-                print(f"🧹 [auto-clean] {len(dead)} گروه مرده حذف شد. باقی‌مانده: {len(live)}", flush=True)
+                print(f"🧹 [auto-clean] {len(dead)} گروه مرده حذف شد.", flush=True)
             await asyncio.sleep(3600)
         except Exception as e:
             print(f"⚠️ group_cleanup: {e}", flush=True)
@@ -1801,14 +2120,14 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
         if locked:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                print(f"🗑️ edit: پاک شد (قفل گروه) | {new_text!r}", flush=True)
+                print(f"🗑️ edit: پاک شد (قفل گروه)", flush=True)
             except: pass
             return
         chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
         if sender_id in chat_mutes and time.time() < chat_mutes[sender_id]:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                print(f"🗑️ edit: پاک شد (سکوت) | {new_text!r}", flush=True)
+                print(f"🗑️ edit: پاک شد (سکوت)", flush=True)
             except: pass
             return
         if settings.get("profanity", True):
@@ -1817,7 +2136,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings.get("warning"):
                         await add_warning(chat_id, sender_id, "فحش (ویرایش)", user_info=ui)
-                    print(f"🗑️ edit: پاک شد (فحش) | {new_text!r}", flush=True)
+                    print(f"🗑️ edit: پاک شد (فحش)", flush=True)
                 except: pass
                 return
         if settings.get("filter"):
@@ -1827,7 +2146,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings.get("warning"):
                         await add_warning(chat_id, sender_id, "کلمه فیلترشده (ویرایش)", user_info=ui)
-                    print(f"🗑️ edit: پاک شد (فیلتر) | {new_text!r}", flush=True)
+                    print(f"🗑️ edit: پاک شد (فیلتر)", flush=True)
                 except: pass
                 return
         if settings.get("link") and contains_link(new_text):
@@ -1835,7 +2154,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "لینک (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (لینک) | {new_text!r}", flush=True)
+                print(f"🗑️ edit: پاک شد (لینک)", flush=True)
             except: pass
             return
         if settings.get("hyperlink") and contains_hyperlink(new_text):
@@ -1843,7 +2162,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "هایپرلینک (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (هایپرلینک) | {new_text!r}", flush=True)
+                print(f"🗑️ edit: پاک شد (هایپرلینک)", flush=True)
             except: pass
             return
         if settings.get("id") and contains_id(new_text):
@@ -1851,7 +2170,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "آیدی (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (آیدی) | {new_text!r}", flush=True)
+                print(f"🗑️ edit: پاک شد (آیدی)", flush=True)
             except: pass
             return
         if settings.get("forward", False) and is_forwarded(message):
@@ -1868,7 +2187,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                     await add_warning(chat_id, sender_id, "گیف (ویرایش)", user_info=ui)
             except: pass
             return
-        print(f"✏️ ویرایش چک شد (بدون تخلف) | {new_text!r}", flush=True)
+        print(f"✏️ ویرایش چک شد (بدون تخلف)", flush=True)
     except Exception as e:
         print(f"❌ process_edited_message: {e}", flush=True)
 
@@ -1879,24 +2198,36 @@ async def handle_message(bot, message):
     global bot_is_active, message_cache, bot_data, settings, text_dedup
 
     try:
-        msg_id = str(message.message_id)
+        # 🔑 استخراج ایمن پیام
+        try:
+            msg_id_raw = getattr(message, "message_id", None)
+            msg_id = str(msg_id_raw) if msg_id_raw is not None else ""
+            msg_id = msg_id.strip()
+        except:
+            msg_id = ""
+
         chat_id = str(message.chat_id) if message.chat_id else ""
         sender_id = str(message.sender_id) if message.sender_id else ""
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
 
-        # 🖊️ تشخیص ویرایش (فقط با مقایسه متن - روش دقیق)
-        pm_key = f"{chat_id}:{msg_id}"
-        prev_text = processed_messages.get(pm_key)
-        if prev_text is not None:
-            if prev_text != raw_text:
-                processed_messages[pm_key] = raw_text
-                print(f"✏️ [edit] {pm_key} | {prev_text!r} → {raw_text!r}", flush=True)
-                await process_edited_message(message, chat_id, sender_id, prev_text, raw_text)
-                return
-            else:
-                return
-        processed_messages[pm_key] = raw_text
+        # 🔍 چک اعتبار msg_id (اگه نامعتبر بود، ویرایش چک نمی‌کنیم)
+        invalid_ids = ("", "None", "none", "NULL", "null", "0", "False", "false")
+        is_valid_mid = msg_id and msg_id not in invalid_ids and not msg_id.startswith("<")
+
+        # 🖊️ تشخیص ویرایش (فقط اگه msg_id معتبر باشه)
+        if is_valid_mid:
+            pm_key = f"{chat_id}:{msg_id}"
+            prev_text = processed_messages.get(pm_key)
+            if prev_text is not None:
+                if prev_text != raw_text:
+                    processed_messages[pm_key] = raw_text
+                    print(f"✏️ [edit] {pm_key} | {prev_text!r} → {raw_text!r}", flush=True)
+                    await process_edited_message(message, chat_id, sender_id, prev_text, raw_text)
+                    return
+                else:
+                    return
+            processed_messages[pm_key] = raw_text
 
         aux = getattr(message, 'aux_data', None) or getattr(message, 'auxData', None)
         button_id = None
@@ -1906,7 +2237,8 @@ async def handle_message(bot, message):
         if sender_id: register_user(sender_id)
         if is_group_chat(chat_id): register_group(chat_id)
 
-        if chat_id and msg_id and sender_id:
+        # ذخیره در کش (فقط اگه msg_id معتبر باشه)
+        if chat_id and is_valid_mid and sender_id:
             if chat_id not in message_cache: message_cache[chat_id] = {}
             message_cache[chat_id][msg_id] = sender_id
             try:
@@ -2094,18 +2426,81 @@ async def handle_message(bot, message):
         # ============ گروه ============
         if not is_group_chat(chat_id): return
 
-        # 💬 سخنگو - FAST PATH (قبل از هر API call)
-        talk_reply = get_talkative_reply(raw_text)
-        if talk_reply:
-            if is_talkative_enabled(chat_id):
-                try:
-                    reply = random.choice(talk_reply)
-                    await bot.send_message(chat_id=chat_id, text=reply, reply_to_message_id=message.message_id)
-                except Exception as e:
-                    print(f"⚠️ talkative: {e}", flush=True)
+        # اطلاعات کاربر
+        ui = await get_user_info(chat_id, sender_id)
+        role = ui["role"]
+        disp = format_user_display(ui, sender_id)
+        is_owner_group = (role == "مالک")
+        is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
+        can_manage = is_owner_group or is_special
+
+        # چک قفل گروه
+        locked, reason = is_group_locked(chat_id)
+        if locked and not can_manage:
+            try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+            except Exception as e:
+                print(f"⚠️ delete locked: {e}", flush=True)
             return
 
-        # 🎨 فونت - FAST PATH
+        # چک سکوت
+        now = time.time()
+        chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
+        if sender_id in chat_mutes:
+            if now < chat_mutes[sender_id]:
+                try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                except Exception as e:
+                    print(f"⚠️ delete muted: {e}", flush=True)
+                return
+            else:
+                del chat_mutes[sender_id]
+                if "mute_list" not in bot_data: bot_data["mute_list"] = {}
+                bot_data["mute_list"][chat_id] = chat_mutes
+                save_data(bot_data, force=True)
+
+        # چک حالت آهسته
+        if not can_manage:
+            slow_sec = bot_data.get("slow_mode", {}).get(chat_id)
+            if slow_sec:
+                if await handle_slow_mode(chat_id, sender_id, slow_sec, ui):
+                    try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    except Exception as e:
+                        print(f"⚠️ slow delete: {e}", flush=True)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال سریع در حالت آهسته", user_info=ui)
+                    return
+
+        # چک ضد تکرار
+        if not can_manage:
+            ar_limit = bot_data.get("anti_repeat", {}).get(chat_id)
+            if ar_limit and raw_text:
+                if await handle_repeat_check(chat_id, sender_id, msg_id, raw_text, ar_limit, ui):
+                    return
+
+        # چک ضد اسپم
+        if settings["spam"] and not can_manage:
+            if chat_id not in spam_tracker: spam_tracker[chat_id] = {}
+            if sender_id not in spam_tracker[chat_id]: spam_tracker[chat_id][sender_id] = []
+            spam_tracker[chat_id][sender_id] = [t for t in spam_tracker[chat_id][sender_id] if ct - t < 5]
+            spam_tracker[chat_id][sender_id].append(ct)
+            if len(spam_tracker[chat_id][sender_id]) >= 5:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "اسپم", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete spam: {e}", flush=True)
+                return
+
+        # 🎯 چالش
+        if is_command(clean_text, "چالش"):
+            try:
+                challenge_msg = build_challenge_message()
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=challenge_msg)
+            except Exception as e:
+                print(f"❌ challenge: {e}", flush=True)
+            return
+
+        # 🎨 فونت
         font_match = re.match(r"^(?:فونت|فوت)\s+([\s\S]+)$", raw_text.strip())
         if font_match:
             font_text = font_match.group(1).strip()
@@ -2130,7 +2525,6 @@ async def handle_message(bot, message):
                     print(f"❌ font: {e}", flush=True)
             return
 
-        # 🎨 راهنمای فونت
         if is_command(clean_text, "فونت", "فوت"):
             try:
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
@@ -2147,74 +2541,16 @@ async def handle_message(bot, message):
             except: pass
             return
 
-        # 🎯 چالش - FAST PATH
-        if is_command(clean_text, "چالش"):
-            try:
-                challenge_msg = build_challenge_message()
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=challenge_msg)
-            except Exception as e:
-                print(f"❌ challenge: {e}", flush=True)
-            return
-
-        # از اینجا به بعد نیاز به user info داریم
-        ui = await get_user_info(chat_id, sender_id)
-        role = ui["role"]
-        disp = format_user_display(ui, sender_id)
-        is_owner_group = (role == "مالک")
-        is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
-        can_manage = is_owner_group or is_special
-
-        locked, reason = is_group_locked(chat_id)
-        if locked and not can_manage:
-            try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-            except Exception as e:
-                print(f"⚠️ delete locked: {e}", flush=True)
-            return
-
-        now = time.time()
-        chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
-        if sender_id in chat_mutes:
-            if now < chat_mutes[sender_id]:
-                try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                except Exception as e:
-                    print(f"⚠️ delete muted: {e}", flush=True)
-                return
-            else:
-                del chat_mutes[sender_id]
-                if "mute_list" not in bot_data: bot_data["mute_list"] = {}
-                bot_data["mute_list"][chat_id] = chat_mutes
-                save_data(bot_data, force=True)
-
-        if not can_manage:
-            slow_sec = bot_data.get("slow_mode", {}).get(chat_id)
-            if slow_sec:
-                if await handle_slow_mode(chat_id, sender_id, slow_sec, ui):
-                    try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    except Exception as e:
-                        print(f"⚠️ slow delete: {e}", flush=True)
-                    if settings.get("warning"):
-                        await add_warning(chat_id, sender_id, "ارسال سریع در حالت آهسته", user_info=ui)
-                    return
-
-        if not can_manage:
-            ar_limit = bot_data.get("anti_repeat", {}).get(chat_id)
-            if ar_limit and raw_text:
-                if await handle_repeat_check(chat_id, sender_id, msg_id, raw_text, ar_limit, ui):
-                    return
-
-        if settings["spam"] and not can_manage:
-            if chat_id not in spam_tracker: spam_tracker[chat_id] = {}
-            if sender_id not in spam_tracker[chat_id]: spam_tracker[chat_id][sender_id] = []
-            spam_tracker[chat_id][sender_id] = [t for t in spam_tracker[chat_id][sender_id] if ct - t < 5]
-            spam_tracker[chat_id][sender_id].append(ct)
-            if len(spam_tracker[chat_id][sender_id]) >= 5:
+        # 💬 سخنگو
+        talk_reply = get_talkative_reply(raw_text)
+        if talk_reply:
+            if is_talkative_enabled(chat_id):
                 try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
-                        await add_warning(chat_id, sender_id, "اسپم", user_info=ui)
+                    reply = random.choice(talk_reply)
+                    await bot.send_message(chat_id=chat_id, text=reply, reply_to_message_id=message.message_id)
                 except Exception as e:
-                    print(f"⚠️ delete spam: {e}", flush=True)
-                return
+                    print(f"⚠️ talkative: {e}", flush=True)
+            return
 
         # 🔄 قفل دوکلمه‌ای - سخنگو
         res = match_two_word_cmd(clean_text, "سخنگو")
@@ -2233,7 +2569,7 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
-        # 🔄 قفل‌های دوکلمه‌ای - بقیه
+        # 🔄 بقیه قفل‌های دوکلمه‌ای
         lock_words_map = {
             "لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
             "خوش‌آمدگویی": "welcome", "خوشآمدگویی": "welcome",
@@ -3150,7 +3486,7 @@ async def handle_message(bot, message):
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
-    print(f"💬 TALKATIVE KEYWORDS: {len(TALKATIVE_MAP)} | REPLIES: {len(TALKATIVE_PHRASES)}", flush=True)
+    print(f"💬 KEYWORDS: {len(TALKATIVE_MAP)} | JOKES: {len(JOKES)} | PROVERBS: {len(PROVERBS)}", flush=True)
     try: asyncio.create_task(cleanup_task())
     except: pass
     try: asyncio.create_task(group_cleanup_task())
