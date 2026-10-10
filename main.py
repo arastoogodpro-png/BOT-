@@ -54,17 +54,310 @@ group_info_cache = {}
 group_info_cache_ttl = {}
 save_counter = {"data": 0, "cache": 0}
 
-# 🔁 ضد تکرار جدید: چک کردن پیام‌های مثل هم
-# {chat_id: {user_id: {"text": "last_text", "count": N, "ids": [msg_ids]}}}
 repeat_tracker = {}
-# 🐌 حالت آهسته
 slow_tracker = {}
-# 🪙 بازی شیر یا خط
 coin_flip_games = {}
 
 EMPTY = "⚫"
 RED = "🔴"
 YELLOW = "🟡"
+
+
+# ================== 🎨 FONT SYSTEM ==================
+def _has_persian(text):
+    return bool(re.search(r'[\u0600-\u06FF]', text or ""))
+
+
+def _has_latin(text):
+    return bool(re.search(r'[A-Za-z]', text or ""))
+
+
+def _map_unicode(text, upper_start, lower_start, digit_start=None):
+    out = []
+    for ch in text:
+        if 'A' <= ch <= 'Z':
+            out.append(chr(upper_start + ord(ch) - ord('A')))
+        elif 'a' <= ch <= 'z':
+            out.append(chr(lower_start + ord(ch) - ord('a')))
+        elif digit_start is not None and '0' <= ch <= '9':
+            out.append(chr(digit_start + ord(ch) - ord('0')))
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def font_bold(t):
+    return _map_unicode(t, 0x1D400, 0x1D41A, 0x1D7CE)
+
+
+def font_italic(t):
+    r = _map_unicode(t, 0x1D434, 0x1D44E)
+    return r.replace(chr(0x1D455), "ℎ")
+
+
+def font_bold_italic(t):
+    return _map_unicode(t, 0x1D468, 0x1D482)
+
+
+def font_script(t):
+    return _map_unicode(t, 0x1D49C, 0x1D4B6)
+
+
+def font_fraktur(t):
+    return _map_unicode(t, 0x1D504, 0x1D51E)
+
+
+def font_sans(t):
+    return _map_unicode(t, 0x1D5A0, 0x1D5BA, 0x1D7E2)
+
+
+def font_sans_bold(t):
+    return _map_unicode(t, 0x1D5D4, 0x1D5EE, 0x1D7EC)
+
+
+def font_mono(t):
+    return _map_unicode(t, 0x1D670, 0x1D68A, 0x1D7F6)
+
+
+def font_fullwidth(t):
+    out = []
+    for ch in t:
+        if 'A' <= ch <= 'Z':
+            out.append(chr(0xFF21 + ord(ch) - ord('A')))
+        elif 'a' <= ch <= 'z':
+            out.append(chr(0xFF41 + ord(ch) - ord('a')))
+        elif '0' <= ch <= '9':
+            out.append(chr(0xFF10 + ord(ch) - ord('0')))
+        elif ch == ' ':
+            out.append('\u3000')
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+SMALL_CAPS_MAP = {
+    'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ',
+    'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+    'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+    'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ',
+    'A': 'ᴀ', 'B': 'ʙ', 'C': 'ᴄ', 'D': 'ᴅ', 'E': 'ᴇ', 'F': 'ꜰ', 'G': 'ɢ',
+    'H': 'ʜ', 'I': 'ɪ', 'J': 'ᴊ', 'K': 'ᴋ', 'L': 'ʟ', 'M': 'ᴍ', 'N': 'ɴ',
+    'O': 'ᴏ', 'P': 'ᴘ', 'Q': 'ǫ', 'R': 'ʀ', 'S': 's', 'T': 'ᴛ', 'U': 'ᴜ',
+    'V': 'ᴠ', 'W': 'ᴡ', 'X': 'x', 'Y': 'ʏ', 'Z': 'ᴢ',
+}
+
+
+def font_small_caps(t):
+    return ''.join(SMALL_CAPS_MAP.get(ch, ch) for ch in t)
+
+
+# --- استایل‌های تزئینی (برای فارسی هم کار می‌کنن) ---
+def deco_strike(t):
+    return ''.join(ch + '\u0336' for ch in t)
+
+
+def deco_underline(t):
+    return ''.join(ch + '\u0332' for ch in t)
+
+
+def deco_overline(t):
+    return ''.join(ch + '\u0305' for ch in t)
+
+
+def deco_double_under(t):
+    return ''.join(ch + '\u0333' for ch in t)
+
+
+def deco_slash(t):
+    return ''.join(ch + '\u0338' for ch in t)
+
+
+def deco_dot_above(t):
+    return ''.join(ch + '\u0307' for ch in t)
+
+
+def build_font_message(text):
+    """ساخت پیام فونت برای متن (فارسی/انگلیسی/ترکیبی)"""
+    text = text.strip()
+    if not text:
+        return None
+    if len(text) > 30:
+        text = text[:30] + "…"
+    
+    has_fa = _has_persian(text)
+    has_en = _has_latin(text)
+    
+    sections = []
+    
+    # بخش ۱: استایل‌های لاتین (فقط اگه متن لاتین داشته باشه)
+    if has_en:
+        sections.append(("🇬🇧 **استایل‌های انگلیسی:**", [
+            ("1️⃣ بولد", font_bold(text)),
+            ("2️⃣ ایتالیک", font_italic(text)),
+            ("3️⃣ بولد ایتالیک", font_bold_italic(text)),
+            ("4️⃣ اسکریپت", font_script(text)),
+            ("5️⃣ گوتیک", font_fraktur(text)),
+            ("6️⃣ ساده", font_sans(text)),
+            ("7️⃣ ساده بولد", font_sans_bold(text)),
+            ("8️⃣ مونو", font_mono(text)),
+            ("9️⃣ پهن", font_fullwidth(text)),
+            ("🔟 کوچک", font_small_caps(text)),
+        ]))
+    
+    # بخش ۲: استایل‌های تزئینی (برای فارسی و انگلیسی هر دو کار می‌کنن)
+    sections.append(("✨ **استایل‌های تزئینی:**", [
+        ("✏️ خط‌خورده", deco_strike(text)),
+        ("✏️ زیرخط", deco_underline(text)),
+        ("✏️ بالای خط", deco_overline(text)),
+        ("✏️ دو زیرخط", deco_double_under(text)),
+        ("✏️ خط‌دار", deco_slash(text)),
+        ("✏️ نقطه‌دار", deco_dot_above(text)),
+        ("✿ گل‌دار", f"✿ {text} ✿"),
+        ("❁ برگ‌دار", f"❁ {text} ❁"),
+        ("【 قاب مربع 】", f"【 {text} 】"),
+        ("「 قاب گوشه 」", f"「 {text} 」"),
+        ("★彡 ستاره‌ای 彡★", f"★彡 {text} 彡★"),
+        ("༺ تیبت ༻", f"༺ {text} ༻"),
+        ("•° کلاسیک °•", f"•°¯`•• {text} ••´¯°•"),
+        ("▁▂▃ خط پایین ▃▂▁", f"▁▂▃ {text} ▃▂▁"),
+    ]))
+    
+    lines = [
+        "╭─━━━━━━━━━━━━━━━━━━━─╮",
+        "   🎨 **فونت‌ساز FLUXBOT** 🎨",
+        "╰─━━━━━━━━━━━━━━━━━━━─╯",
+        "",
+        f"📝 **متن شما:** `{text}`",
+        "━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    
+    for title, items in sections:
+        lines.append(title)
+        lines.append("")
+        for name, styled in items:
+            lines.append(f"**{name}:**")
+            lines.append(styled)
+            lines.append("")
+        lines.append("━━━━━━━━━━━━━━━━━━━")
+        lines.append("")
+    
+    lines.append("💡 **روی هر خط، نگه دار و کپی کن!**")
+    lines.append("")
+    lines.append("⚡ **FLUXBOT**")
+    
+    return "\n".join(lines)
+
+
+# ================== 🎯 CHALLENGES ==================
+CHALLENGE_TEXTS = [
+    "🎯 **چالش امروز:**\n\nبه ۳ نفر از اعضای این گروه یه تعریف **واقعی** بگو! 💬",
+    "🔥 **چالش:**\n\nآخرین باری که به کسی کمک کردی کِی بود؟ همینجا تعریف کن! 🤝",
+    "💪 **چالش ورزشی:**\n\nامروز ۲۰ تا اسکات برو، بعد بیا بگو انجام دادی! 🏋️",
+    "📖 **چالش کتاب:**\n\nاسم آخرین کتابی که خوندی چیه؟ یه جمله ازش بگو! 📚",
+    "🎵 **چالش موزیک:**\n\nآهنگی که این هفته بیشتر گوش دادی چیه؟ اسمش رو بگو! 🎧",
+    "😊 **چالش مهربونی:**\n\nامروز به یه نفر که نمی‌شناسیش لبخند بزن و اینجا بگو چه حسی داشت! 😄",
+    "🌟 **چالش رویا:**\n\nاگه یه آرزو داشتی، چی بود؟ اینجا بنویس! ✨",
+    "🍕 **چالش غذا:**\n\nغذای مورد علاقه‌ات چیه و چرا؟ 🍔",
+    "📸 **چالش خاطره:**\n\nقشنگ‌ترین خاطره‌ات از این هفته رو تعریف کن! 💭",
+    "🎮 **چالش گیم:**\n\nآخرین بازی‌ای که انجام دادی چی بود؟ نظرت درباره‌ش چیه؟ 🕹️",
+    "🎁 **چالش هدیه:**\n\nاگه می‌تونستی به یه نفر یه هدیه بدی، چی بود و به کی؟ 🎀",
+    "🏃 **چالش حرکت:**\n\nیه کار خوب و بدون انتظار برای کسی انجام بده و بعد بیا تعریف کن! 💫",
+    "🌸 **چالش احساس:**\n\nامروز چه حسی داری؟ با یه ایموجی توصیفش کن و بگو چرا! 💖",
+    "🧠 **چالش فکری:**\n\nآخرین باری که یه چیز جدید یاد گرفتی کِی بود؟ چی بود؟ 📖",
+    "🌙 **چالش شب:**\n\nقبل خواب به چی فکر می‌کنی؟ صادق باش! 💭",
+]
+
+CHALLENGE_POLLS = [
+    ("تا حالا به کسی دروغ گفتی؟", ["بله 😅", "نه 🙅", "شایدم 😏"]),
+    ("صبح‌ها زود بیدار می‌شی؟", ["بله ☀️", "نه 😴", "فقط جمعه‌ها ✨"]),
+    ("قهوه یا چای؟", ["قهوه ☕", "چای 🍵", "هیچکدوم ❌"]),
+    ("شب‌ها دیر می‌خوابی؟", ["بله 🌙", "نه 😇", "بعضی وقتا 😐"]),
+    ("اهل ورزشی؟", ["بله 💪", "نه 😅", "تازه شروع کردم 🚀"]),
+    ("فیلم ترجیح می‌دی یا سریال؟", ["فیلم 🎬", "سریال 📺", "هردو 🎭"]),
+    ("تا حالا از گروهی اخراج شدی؟", ["بله 😬", "نه 😎", "زیاد 😅"]),
+    ("گوشی اندروید داری یا آیفون؟", ["اندروید 🤖", "آیفون 🍎", "هردو 📱"]),
+    ("اهل سفر هستی؟", ["بله ✈️", "نه 🏠", "کم پیش میاد 🚗"]),
+    ("شیرینی دوست داری؟", ["عاشقشم 🍰", "نه 🚫", "کم می‌خورم 🍪"]),
+    ("شب یا روز؟", ["شب 🌙", "روز ☀️", "هردو 🎭"]),
+    ("آهنگ شاد یا غمگین؟", ["شاد 🎉", "غمگین 😢", "بستگی داره 🎵"]),
+]
+
+
+def build_challenge_message():
+    """انتخاب تصادفی: 2/3 متنی، 1/3 نظرسنجی"""
+    mode = random.choice(["text", "text", "poll"])
+    
+    if mode == "text":
+        challenge = random.choice(CHALLENGE_TEXTS)
+        return (
+            "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+            "   🎯 **چالش FLUXBOT** 🎯\n"
+            "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+            f"{challenge}\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "💡 **نظرت رو بگو!**\n\n"
+            "⚡ **FLUXBOT**"
+        )
+    else:
+        question, options = random.choice(CHALLENGE_POLLS)
+        opts = "\n".join([f"{i+1}️⃣ {opt}" for i, opt in enumerate(options)])
+        return (
+            "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
+            "   📊 **نظرسنجی FLUXBOT** 📊\n"
+            "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
+            f"❓ **{question}**\n\n"
+            f"{opts}\n\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "💬 **شماره گزینه رو بفرست!**\n\n"
+            "⚡ **FLUXBOT**"
+        )
+
+
+# ================== Group Validation ==================
+def is_dead_group_error(err_str):
+    if not err_str: return False
+    err = str(err_str).lower()
+    dead_keywords = [
+        "not found", "not_found", "chat not found", "chat_not_found",
+        "kicked", "bot was kicked", "bot_kicked",
+        "not member", "not_member", "not a member", "not_a_member",
+        "bot is not", "bot_is_not",
+        "not admin", "not_admin", "admin required", "admin_required",
+        "chat_admin_required", "not enough rights", "not_enough_rights",
+        "forbidden", "chat_forbidden", "chat_write_forbidden",
+        "peer_id_invalid", "peer id invalid",
+        "peer not found", "peer_not_found",
+        "channel_private", "chat_private",
+        "you are banned", "user_banned", "banned",
+        "chat blocked", "chat_blocked",
+        "access denied", "access_denied",
+    ]
+    return any(k in err for k in dead_keywords)
+
+
+async def validate_group(gid):
+    if not gid:
+        return False, "شناسه خالی"
+    try:
+        info = await bot.get_chat_info(gid)
+        if not info:
+            return False, "پاسخ خالی از سرور"
+        data = info.get("data", info) if isinstance(info, dict) else info
+        if isinstance(data, dict):
+            status = str(data.get("status", "")).lower()
+            if status in ("error", "failed", "fail", "nok"):
+                msg = str(data.get("message") or data.get("error") or "خطای نامشخص")
+                return False, msg
+            chat = data.get("chat", data)
+            if isinstance(chat, dict) and not chat:
+                return False, "اطلاعات گروه خالی"
+        return True, None
+    except Exception as e:
+        err = str(e)
+        if is_dead_group_error(err):
+            return False, err
+        return True, err
 
 
 # ================== Game Functions ==================
@@ -405,7 +698,6 @@ async def find_reply_target(message, chat_id):
                 return sid
     except Exception as e:
         print(f"⚠️ API get_message: {e}", flush=True)
-    print(f"⚠️ Target not found: rid={rid}", flush=True)
     return None
 
 
@@ -657,14 +949,42 @@ async def get_group_list_text():
     groups = ensure_list(bot_data.get("known_groups", []))
     if not groups:
         return "📋 **لیست گروه‌ها**\n\n📭 ربات هنوز توی هیچ گروهی نیست.\n\n⚡ **FLUXBOT**"
+    
+    live_groups = []
+    dead_groups = []
+    now = time.time()
+    for gid in groups:
+        cached = group_info_cache.get(gid)
+        ttl = group_info_cache_ttl.get(gid, 0)
+        if cached and now < ttl:
+            live_groups.append(gid)
+            continue
+        is_alive, _err = await validate_group(gid)
+        if is_alive:
+            live_groups.append(gid)
+        else:
+            dead_groups.append(gid)
+            print(f"🗑️ گروه مرده حذف شد: {gid} | {_err}", flush=True)
+        await asyncio.sleep(0.15)
+    
+    if dead_groups:
+        bot_data["known_groups"] = live_groups
+        save_data(bot_data, force=True)
+        for gid in dead_groups:
+            group_info_cache.pop(gid, None)
+            group_info_cache_ttl.pop(gid, None)
+    
+    if not live_groups:
+        return "📋 **لیست گروه‌ها**\n\n📭 هیچ گروه فعالی وجود نداره.\n\n⚡ **FLUXBOT**"
+    
     text = (
         "╭─━━━━━━━━━━━━━━━━━━━─╮\n"
         "   ⚡ **FLUXBOT** ⚡\n"
-        f"   📋 لیست گروه‌ها ({len(groups)})\n"
+        f"   📋 لیست گروه‌ها ({len(live_groups)})\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
     )
     now = time.time()
-    for i, gid in enumerate(groups, 1):
+    for i, gid in enumerate(live_groups, 1):
         cached = group_info_cache.get(gid)
         ttl = group_info_cache_ttl.get(gid, 0)
         if cached and now < ttl:
@@ -718,6 +1038,23 @@ def get_features_text():
         "   📖 قابلیت‌های کامل\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
+        "🎨 **فونت‌ساز (جدید!)**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📝 دستور: `فونت [متن]`\n"
+        "├ 📝 یا: `فوت [متن]`\n"
+        "├ 🌍 پشتیبانی از **فارسی** و **انگلیسی**\n"
+        "├ 🎨 بالای ۱۰ استایل مختلف\n"
+        "├ ✿ استایل‌های تزئینی (گل، ستاره، قاب و...)\n"
+        "└ 💡 فقط در گروه کار می‌کنه\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎯 **چالش روزانه (جدید!)**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📌 دستور: `چالش`\n"
+        "├ 🎲 چالش تصادفی (متنی یا نظرسنجی)\n"
+        "├ 💬 چالش‌های جذاب و سرگرم‌کننده\n"
+        "├ 📊 نظرسنجی‌های شاد و باحال\n"
+        "└ 💡 فقط در گروه کار می‌کنه\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "🛡️ **امنیت و مدیریت گروه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 🔗 قفل لینک (حذف خودکار لینک)\n"
@@ -727,7 +1064,6 @@ def get_features_text():
         "├ 🤬 قفل فحش (۱۰۰+ کلمه)\n"
         "├ 📨 قفل فوروارد\n"
         "├ 🎞️ قفل گیف\n"
-        "├ 👋 قفل خداحافظی\n"
         "├ 👋 قفل خوش‌آمدگویی\n"
         "├ 🔒 قفل گروه دستی\n"
         "├ ⏱️ قفل موقت (به ساعت)\n"
@@ -757,6 +1093,7 @@ def get_features_text():
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 🎲 بازی دوز چهارتایی (دو نفره)\n"
         "├ 🪙 بازی شیر یا خط (شانسی)\n"
+        "├ 🎯 چالش روزانه\n"
         "├ 😂 جک و جوک\n"
         "├ 📜 ضرب‌المثل\n"
         "├ 💡 دانستی\n"
@@ -804,6 +1141,8 @@ def get_features_text():
         "├ `قوانین` → نمایش قوانین\n"
         "├ `تنظیم اصل [نام]`\n"
         "├ `تنظیم لقب [نام]`\n"
+        "├ `فونت [متن]` → فونت‌ساز 🎨\n"
+        "├ `چالش` → چالش روزانه 🎯\n"
         "├ `جک` / `ضرب المثل`\n"
         "├ `دانستی` / `فکت`\n"
         "├ `پ ن پ` / `شعر`\n"
@@ -829,6 +1168,7 @@ def get_features_text():
         "├ `حذف` / `حذف [دقیقه]`\n"
         "├ `پاکسازی [عدد]` → پاکسازی انبوه\n"
         "├ `قفل گروه` / `باز`\n"
+        "├ `ارسال پیام همگانی گروه [متن]` 📢\n"
         "└ `لیست گروه ها` (فقط مالک)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "✨ **چرا FluxBot؟**\n"
@@ -971,6 +1311,41 @@ async def cleanup_task():
             print(f"🧹 Cleanup done", flush=True)
         except Exception as e:
             print(f"⚠️ cleanup: {e}", flush=True)
+
+
+async def group_cleanup_task():
+    await asyncio.sleep(600)
+    while True:
+        try:
+            groups = ensure_list(bot_data.get("known_groups", []))
+            if not groups:
+                await asyncio.sleep(3600)
+                continue
+            live = []
+            dead = []
+            for gid in groups:
+                try:
+                    is_alive, err = await validate_group(gid)
+                    if is_alive:
+                        live.append(gid)
+                    else:
+                        dead.append((gid, err))
+                        print(f"🗑️ [auto-clean] گروه مرده: {gid} | {err}", flush=True)
+                    await asyncio.sleep(0.2)
+                except Exception as e:
+                    print(f"⚠️ validate_group {gid}: {e}", flush=True)
+                    live.append(gid)
+            if dead:
+                bot_data["known_groups"] = live
+                save_data(bot_data, force=True)
+                for gid, _ in dead:
+                    group_info_cache.pop(gid, None)
+                    group_info_cache_ttl.pop(gid, None)
+                print(f"🧹 [auto-clean] {len(dead)} گروه مرده حذف شد. باقی‌مانده: {len(live)}", flush=True)
+            await asyncio.sleep(3600)
+        except Exception as e:
+            print(f"⚠️ group_cleanup: {e}", flush=True)
+            await asyncio.sleep(600)
 
 
 def contains_link(text):
@@ -1196,6 +1571,8 @@ def get_help_text():
         "├ 👑 `مقام`\n├ 📊 `پروفایل`\n├ 🏆 `آمار گروه`\n├ ⏰ `ساعت`\n"
         "├ 📜 `قوانین`\n"
         "├ 🐺 `تنظیم اصل [نام]`\n├ 🎭 `تنظیم لقب [نام]`\n"
+        "├ 🎨 `فونت [متن]` → فونت‌ساز\n"
+        "├ 🎯 `چالش` → چالش روزانه\n"
         "├ 🎟️ `زدن کد دعوت`\n├ 🎫 `کد دعوت من`\n├ ⭐ `امتیاز من`\n"
         "├ 📖 `قابلیت‌های ربات`\n"
         "├ 🏆 `لیست برتر دعوت‌کنندگان`\n├ 🎮 `لیست بازی`\n"
@@ -1229,6 +1606,7 @@ def get_help_text():
         "│   مثال: `5 ثانیه` / `1 دقیقه` / `1 ساعت` / `1 روز`\n"
         "├ ❌ `حالت آهسته بسته`\n"
         "├ 🧹 `پاکسازی [عدد]` → پاکسازی انبوه\n"
+        "├ 📢 `ارسال پیام همگانی گروه [متن]` (فقط مالک)\n"
         "└ 📋 `لیست گروه ها` (توی پیوی)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
     )
@@ -1239,9 +1617,27 @@ def get_users_text():
     return f"👥 **کاربران:** **{c}**\n\n⚡ **FLUXBOT**"
 
 
-def get_groups_text():
-    c = len(ensure_list(bot_data.get("known_groups", [])))
-    return f"🏠 **گروه‌های فعال:** **{c}**\n\n⚡ **FLUXBOT**"
+async def get_groups_text():
+    groups = ensure_list(bot_data.get("known_groups", []))
+    if not groups:
+        return f"🏠 **گروه‌های فعال:** **0**\n\n⚡ **FLUXBOT**"
+    live = []
+    dead = []
+    for gid in groups:
+        is_alive, err = await validate_group(gid)
+        if is_alive:
+            live.append(gid)
+        else:
+            dead.append(gid)
+            print(f"🗑️ [groups_btn] حذف گروه مرده: {gid} | {err}", flush=True)
+        await asyncio.sleep(0.15)
+    if dead:
+        bot_data["known_groups"] = live
+        save_data(bot_data, force=True)
+        for gid in dead:
+            group_info_cache.pop(gid, None)
+            group_info_cache_ttl.pop(gid, None)
+    return f"🏠 **گروه‌های فعال:** **{len(live)}**\n\n⚡ **FLUXBOT**"
 
 
 async def get_top_inviters_text():
@@ -1332,14 +1728,7 @@ async def bulk_cleanup(chat_id, sender_id, limit):
     return deleted, failed
 
 
-# 🔁 ضد تکرار هوشمند: چک کردن پیام‌های یکسان و پشت سر هم
 async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
-    """
-    ضد تکرار هوشمند:
-    - فقط پیام‌های یکسان رو می‌شمره
-    - اگه پیام جدید فرق داشت، شمارنده ریست می‌شه
-    - وقتی به limit رسید، همه پیام‌های یکسان رو پاک می‌کنه
-    """
     if not text:
         return False
     
@@ -1472,7 +1861,6 @@ async def handle_message(bot, message):
         broadcast_match = re.match(r"^ارسال\s+پیام\s+همگانی\s+گروه\s+([\s\S]+)$", raw_text.strip())
         if broadcast_match:
             if not is_owner_check:
-                # غیر مالک: بی‌صدا نادیده بگیر
                 return
             broadcast_text = broadcast_match.group(1).strip()
             if not broadcast_text:
@@ -1495,6 +1883,9 @@ async def handle_message(bot, message):
             
             sent = 0
             failed = 0
+            failed_details = []
+            dead_groups = []
+            
             for gid in groups:
                 try:
                     await bot.send_message(chat_id=gid, text=broadcast_text)
@@ -1502,9 +1893,26 @@ async def handle_message(bot, message):
                     await asyncio.sleep(1.5)
                 except Exception as e:
                     failed += 1
-                    print(f"⚠️ broadcast {gid}: {e}", flush=True)
+                    err_str = str(e)
+                    is_alive, val_err = await validate_group(gid)
+                    if not is_alive:
+                        dead_groups.append(gid)
+                        failed_details.append((gid, err_str, True, val_err))
+                        print(f"🗑️ [broadcast] گروه مرده: {gid} | send_err={err_str} | val_err={val_err}", flush=True)
+                    else:
+                        failed_details.append((gid, err_str, False, val_err))
+                        print(f"⚠️ [broadcast] خطای ارسال: {gid} | {err_str}", flush=True)
+                    await asyncio.sleep(0.5)
             
-            # حذف پیام وضعیت
+            if dead_groups:
+                current = ensure_list(bot_data.get("known_groups", []))
+                bot_data["known_groups"] = [g for g in current if g not in dead_groups]
+                save_data(bot_data, force=True)
+                for gid in dead_groups:
+                    group_info_cache.pop(gid, None)
+                    group_info_cache_ttl.pop(gid, None)
+                print(f"🧹 [broadcast] {len(dead_groups)} گروه مرده حذف شد", flush=True)
+            
             try:
                 if status_msg:
                     mid = extract_msg_id(status_msg)
@@ -1512,21 +1920,36 @@ async def handle_message(bot, message):
                         await bot.delete_message(chat_id=chat_id, message_id=mid)
             except: pass
             
+            report = (
+                f"✅ **ارسال همگانی انجام شد!**\n\n"
+                f"📤 موفق: **{sent}**\n"
+                f"❌ ناموفق: **{failed}**\n"
+                f"📊 کل گروه‌ها: **{len(groups)}**\n"
+            )
+            if dead_groups:
+                report += f"🗑️ حذف‌شده (مرده): **{len(dead_groups)}**\n"
+            report += f"\n⚡ **FLUXBOT**"
+            
+            if failed_details:
+                details_text = "\n\n🔍 **جزئیات خطاها:**\n"
+                for gid, err_str, is_dead, val_err in failed_details[:20]:
+                    short_gid = gid[-8:] if len(gid) > 8 else gid
+                    err_display = (val_err or err_str)[:120].replace("\n", " ")
+                    tag = "🗑️ حذف شد" if is_dead else "⚠️ باقی ماند"
+                    details_text += f"\n├ `...{short_gid}` → {tag}\n│    {err_display}\n"
+                if len(failed_details) > 20:
+                    details_text += f"\n... و {len(failed_details) - 20} خطای دیگر"
+                report += details_text
+            
             try:
-                await bot.send_message(chat_id=chat_id, text=(
-                    f"✅ **ارسال همگانی انجام شد!**\n\n"
-                    f"📤 موفق: **{sent}**\n"
-                    f"❌ ناموفق: **{failed}**\n"
-                    f"📊 کل گروه‌ها: **{len(groups)}**\n\n"
-                    f"⚡ **FLUXBOT**"
-                ))
+                await send_long_message(chat_id, report)
             except: pass
             return
 
         # ============ پیوی ============
         if is_private_chat(chat_id):
             if is_owner_check and clean_text in ("لیست گروه ها", "لیست گروه‌ها", "گروه ها", "گروه‌ها", "لیست گروها"):
-                msg = await bot.send_message(chat_id=chat_id, text="⏳ در حال جمع‌آوری...")
+                msg = await bot.send_message(chat_id=chat_id, text="⏳ در حال بررسی گروه‌ها...")
                 groups_text = await get_group_list_text()
                 try:
                     mid = extract_msg_id(msg)
@@ -1543,7 +1966,8 @@ async def handle_message(bot, message):
             if button_id == "btn_users" or raw_text == BTN_USERS:
                 await bot.send_message(chat_id=chat_id, text=get_users_text()); return
             if button_id == "btn_groups" or raw_text == BTN_GROUPS:
-                await bot.send_message(chat_id=chat_id, text=get_groups_text()); return
+                text = await get_groups_text()
+                await bot.send_message(chat_id=chat_id, text=text); return
             if button_id == "btn_dev" or raw_text == BTN_DEV:
                 await bot.send_message(chat_id=chat_id, text=get_dev_text()); return
 
@@ -1620,6 +2044,46 @@ async def handle_message(bot, message):
 
         # ============ گروه ============
         if not is_group_chat(chat_id): return
+
+        # 🎨 دستور فونت / فوت
+        font_match = re.match(r"^(?:فونت|فوت)\s+([\s\S]+)$", raw_text.strip())
+        if font_match:
+            font_text = font_match.group(1).strip()
+            if not font_text:
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        reply_to_message_id=message.message_id,
+                        text="⚠️ **متن رو وارد کن!**\n\n📝 مثال:\n`فونت سلام`\n`فوت Hello`"
+                    )
+                except: pass
+                return
+            try:
+                font_msg = build_font_message(font_text)
+                if font_msg:
+                    await send_long_message(chat_id, font_msg, reply_to_message_id=message.message_id)
+            except Exception as e:
+                print(f"❌ font: {e}", flush=True)
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        reply_to_message_id=message.message_id,
+                        text="⚠️ خطا در ساخت فونت. متن ساده‌تری امتحان کن."
+                    )
+                except: pass
+            return
+
+        # 🎯 دستور چالش
+        if is_command(clean_text, "چالش"):
+            try:
+                challenge_msg = build_challenge_message()
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=challenge_msg
+                )
+            except Exception as e:
+                print(f"❌ challenge: {e}", flush=True)
+            return
 
         ui = await get_user_info(chat_id, sender_id)
         role = ui["role"]
@@ -2592,6 +3056,8 @@ async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
     try: asyncio.create_task(cleanup_task())
+    except: pass
+    try: asyncio.create_task(group_cleanup_task())
     except: pass
     try: await bot.run()
     except Exception as e: print(f"❌ BOT RUN: {type(e).__name__}: {e}", flush=True)
