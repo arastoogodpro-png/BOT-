@@ -1,5 +1,5 @@
 # games/betting.py
-# 🎰 بازی شرط بندی - نسخه نهایی با فیکس کامل
+# 🎰 بازی شرط بندی - نسخه نهایی با PV Debug
 import time
 import random
 import asyncio
@@ -39,10 +39,6 @@ def _normalize(text):
     s = s.translate(PERSIAN_DIGITS)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
-
-
-def _t_nospace(s):
-    return _normalize(s).replace(" ", "")
 
 
 def _is_special_user(sender_id, sender_display):
@@ -154,7 +150,7 @@ def _set_cooldown(bot_data, uid, key):
     bot_data["betting_cooldowns"][uid][key] = time.time()
 
 
-# ═══════════ Send ═══════════
+# ═══════════ Send Helpers ═══════════
 async def _send(bot, chat_id, text, reply_to=None):
     try:
         kwargs = {"chat_id": chat_id, "text": text}
@@ -168,12 +164,10 @@ async def _send(bot, chat_id, text, reply_to=None):
 
 
 async def _send_long(bot, chat_id, text, reply_to=None, max_len=900):
-    """ارسال متن بلند به‌صورت تکه‌تکه"""
     if not text:
         return None
     if len(text) <= max_len:
         return await _send(bot, chat_id, text, reply_to=reply_to)
-    
     parts = []
     remaining = text
     while len(remaining) > max_len:
@@ -184,7 +178,6 @@ async def _send_long(bot, chat_id, text, reply_to=None, max_len=900):
         remaining = remaining[cut:].strip()
     if remaining:
         parts.append(remaining)
-    
     first_result = None
     for i, part in enumerate(parts):
         if not part:
@@ -223,37 +216,57 @@ async def _auto_delete(bot, chat_id, message_id, delay):
 
 
 async def _try_pv_send(bot, user_id, text):
+    """
+    تلاش قدرتمند برای ارسال به پیوی
+    برمی‌گردونه: (موفقیت: bool, جزئیات: str)
+    """
     uid = str(user_id or "").strip()
     if not uid:
-        return False
-    variants = [uid]
+        return False, "شناسه خالیه"
+
+    print(f"🔍 [PV DEBUG] user_id raw = {uid!r}", flush=True)
+
+    # ساخت همه فرمت‌های ممکن
+    variants = []
+
+    def add(v):
+        if v and v not in variants:
+            variants.append(v)
+
+    add(uid)
+    # اگه u داره، بدون u هم امتحان کن
+    if uid.startswith("u") and len(uid) > 1:
+        add(uid[1:])
+    # اگه u نداره، با u هم امتحان کن
+    elif not uid.startswith(("u", "b", "g", "c", "U")):
+        add("u" + uid)
+    # کپی با b (بعضی روبیکاها با b کار می‌کنن)
     if uid.startswith("u"):
-        variants.append(uid[1:])
-    elif not uid.startswith(("u", "b", "g", "c")):
-        variants.append("u" + uid)
-    seen = set()
-    unique = []
-    for v in variants:
-        if v and v not in seen:
-            unique.append(v)
-            seen.add(v)
-    for fmt in unique:
+        add("b" + uid[1:])
+
+    print(f"🔍 [PV DEBUG] variants = {variants}", flush=True)
+
+    errors = []
+    for fmt in variants:
         try:
+            print(f"🔍 [PV DEBUG] trying chat_id = {fmt!r}", flush=True)
+            # تلاش ساده
             await bot.send_message(chat_id=fmt, text=text)
-            print(f"✅ PV sent to: {fmt}", flush=True)
-            return True
+            print(f"✅ [PV DEBUG] SUCCESS with {fmt!r}", flush=True)
+            return True, f"موفق با {fmt}"
         except Exception as e:
-            print(f"⚠️ PV failed ({fmt}): {type(e).__name__}: {e}", flush=True)
+            err = f"{type(e).__name__}: {e}"
+            errors.append(f"{fmt} → {err[:200]}")
+            print(f"⚠️ [PV DEBUG] FAILED {fmt!r}: {err[:300]}", flush=True)
             await asyncio.sleep(0.3)
-    return False
+
+    return False, " | ".join(errors) if errors else "خطای نامشخص"
 
 
-# ═══════════ تشخیص راهنما (قوی‌ترین حالت) ═══════════
+# ═══════════ تشخیص راهنما ═══════════
 def _is_help_cmd(raw, clean):
-    """تشخیص راهنمای شرط بندی از هر ورودی"""
-    if not raw and not clean:
-        return False
-    inputs = []
+    """تشخیص راهنما با حداکثر تلرانس"""
+    candidates = []
     for s in (raw, clean):
         if not s:
             continue
@@ -261,24 +274,30 @@ def _is_help_cmd(raw, clean):
         if not s_str:
             continue
         norm = _normalize(s_str)
-        inputs.append(norm)
-        inputs.append(norm.replace(" ", ""))
-        inputs.append(norm.lower())
-        inputs.append(norm.replace(" ", "").lower())
-    
-    for inp in inputs:
-        if not inp:
+        candidates.append(norm)
+        candidates.append(norm.replace(" ", ""))
+        candidates.append(norm.lower())
+        candidates.append(norm.replace(" ", "").lower())
+
+    exact_matches = {
+        "شرط بندی", "شرطبندی",
+        "اموزش شرط بندی", "اموزششرطبندی", "آموزششرطبندی",
+        "آموزش شرط بندی",
+        "راهنما شرط بندی", "راهنماشرطبندی",
+        "راهنمای شرط بندی", "راهنمایشرطبندی",
+    }
+
+    for c in candidates:
+        if not c:
             continue
-        # چک‌های دقیق
-        if inp in ("شرط بندی", "شرطبندی",
-                   "اموزش شرط بندی", "اموزششرطبندی",
-                   "آموزش شرط بندی", "آموزششرطبندی",
-                   "راهنما شرط بندی", "راهنماشرطبندی",
-                   "راهنمای شرط بندی", "راهنمایشرطبندی"):
+        if c in exact_matches:
             return True
-        # چک fallback: هرچی "شرط" و "بندی" داره و کوتاهه
-        if len(inp) <= 25 and "شرط" in inp and "بندی" in inp:
+
+    # Fallback: هرچی "شرط" و "بندی" داره و کوتاهه
+    for c in candidates:
+        if c and len(c) <= 25 and "شرط" in c and "بندی" in c:
             return True
+
     return False
 
 
@@ -309,19 +328,27 @@ async def _handle_inner(ctx):
     if not isinstance(bot_data, dict):
         return False
 
-    # ═══ DEBUG (فقط برای تشخیص) ═══
-    print(f"🎰 [betting] raw={raw!r} clean={text!r}", flush=True)
-
     raw_norm = _normalize(raw)
     raw_low = raw_norm.lower()
     text_norm = _normalize(text)
     text_low = text_norm.lower()
     t_nospace = text_low.replace(" ", "")
-    r_nospace = raw_low.replace(" ", "")
 
-    # ═══════════════════════════════════════════════
-    # 📖 راهنما — قبل از همه چیز، حتی اگه قفل باشه
-    # ═══════════════════════════════════════════════
+    # ═══ 🔬 تست پیوی (Debug) ═══
+    if text_low == "تست پیوی" or raw_low == "تست پیوی":
+        ok, info = await _try_pv_send(bot, sender_id, "✅ تست موفق! پیوی کار می‌کنه.")
+        status = "✅ پیوی باز شد" if ok else "❌ پیوی کار نمی‌کنه"
+        await _send(bot, chat_id,
+            f"🔬 **تست پیوی**\n━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 **شناسه تو:** `{sender_id}`\n"
+            f"{status}\n\n"
+            f"📋 **جزئیات:**\n{info[:500]}\n\n"
+            f"💡 اگه خطا داشت، همین متن رو برای سازنده بفرست.\n\n"
+            "⚡ **FLUXBOT**",
+            reply_to=msg.message_id)
+        return True
+
+    # ═══ 📖 راهنما (اول از همه) ═══
     if _is_help_cmd(raw, text):
         print(f"🎯 [betting] HELP triggered", flush=True)
         bal = get_balance(bot_data, sender_id)
@@ -329,16 +356,12 @@ async def _handle_inner(ctx):
         await _send_long(bot, chat_id, _get_help_text(bal), reply_to=msg.message_id)
         return True
 
-    # ═══ چک قفل (بعد از راهنما) ═══
+    # ═══ چک قفل ═══
     if not settings.get("betting_enabled", True):
         triggered = (
-            text_low in ("موجودی", "موجودی من", "شناسه", "شناسه من")
-            or raw_low.startswith("شرط بندی ")
+            text_low in ("موجودی", "شناسه", "گردونه", "اسلات", "اسلات ماشین")
+            or raw_low.startswith(("شرط بندی ", "ساخت کد هدیه", "استفاده کد", "ارسال هدیه"))
             or raw_low in ("شرط بندی", "شرط‌بندی")
-            or raw_low.startswith("ساخت کد هدیه")
-            or raw_low.startswith("استفاده کد")
-            or raw_low.startswith("ارسال هدیه")
-            or text_low in ("گردونه", "گردونه شانس", "اسلات", "اسلات ماشین")
         )
         if triggered:
             await _send(bot, chat_id,
@@ -348,43 +371,38 @@ async def _handle_inner(ctx):
         return False
 
     # ═══ 💎 موجودی ═══
-    if text_low in ("موجودی", "موجودی من", "موجودی چقدره", "موجودی چقدر",
-                    "موجودی چنده", "حساب من", "کیف پول من", "پول من") \
-       or raw_low in ("موجودی", "موجودی من", "حساب من"):
+    if text_low in ("موجودی", "موجودی من", "موجودی چقدره", "حساب من",
+                    "کیف پول من", "پول من") or raw_low in ("موجودی", "موجودی من"):
         bal = get_balance(bot_data, sender_id)
         _safe_save(save_data, bot_data)
         await _send(bot, chat_id,
             "💰 **موجودی شما** 💰\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 **کاربر:** {name}\n"
             f"💎 **موجودی:** `{bal:,}` واحد\n\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
             "💡 راهنما: `شرط بندی`\n\n"
             "⚡ **FLUXBOT**",
             reply_to=msg.message_id)
         return True
 
     # ═══ 🆔 شناسه ═══
-    if text_low in ("شناسه", "شناسه من", "ایدی من", "آیدی من", "id", "my id") \
-       or raw_low in ("شناسه", "شناسه من", "ایدی من", "آیدی من"):
+    if text_low in ("شناسه", "شناسه من", "ایدی من", "آیدی من") \
+       or raw_low in ("شناسه", "شناسه من"):
         await _send(bot, chat_id,
             "🆔 **شناسه شما** 🆔\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 **کاربر:** {name}\n"
             f"🆔 **شناسه:** `{sender_id}`\n\n"
-            "📌 این شناسه ثابته.\n"
-            "💡 با این شناسه هدیه دریافت کن.\n\n"
+            "💡 این شناسه ثابته.\n\n"
             "⚡ **FLUXBOT**",
             reply_to=msg.message_id)
         return True
 
     # ═══ 🎡 گردونه ═══
-    if text_low in ("گردونه", "گردونه شانس", "استفاده گردونه",
-                    "چرخوندن گردونه", "بچرخون گردونه") \
+    if text_low in ("گردونه", "گردونه شانس", "استفاده گردونه") \
        or t_nospace in ("گردونه", "گردونهشانس", "استفادهگردونه"):
         return await _spin_wheel(bot, chat_id, sender_id, name, msg, bot_data, save_data)
 
     # ═══ 🎰 اسلات ═══
-    if text_low in ("اسلات", "اسلات ماشین", "استفاده اسلات",
-                    "چرخوندن اسلات", "بچرخون اسلات") \
+    if text_low in ("اسلات", "اسلات ماشین", "استفاده اسلات") \
        or t_nospace in ("اسلات", "اسلاتماشین", "استفادهاسلات"):
         return await _spin_slot(bot, chat_id, sender_id, name, msg, bot_data, save_data)
 
@@ -437,35 +455,27 @@ async def _spin_wheel(bot, chat_id, sender_id, name, msg, bot_data, save_data):
     ok, remaining = _check_cooldown(bot_data, str(sender_id), "wheel")
     if not ok:
         await _send(bot, chat_id,
-            "⏰ **هنوز آماده نیست!**\n\n"
-            "🎡 گردونه روزانه‌ست.\n"
+            f"⏰ **هنوز آماده نیست!**\n\n🎡 گردونه روزانه‌ست.\n"
             f"⌛ **باقی‌مونده:** {_fmt_time(remaining)}\n\n⚡ **FLUXBOT**",
             reply_to=msg.message_id)
         return True
-
     await _send(bot, chat_id,
         "🎡 **گردونه در حال چرخش...** 🎡\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n\n"
-        "🎯 گردونه داره می‌چرخه...\n\n⚡ **FLUXBOT**",
+        f"👤 **بازیکن:** {name}\n\n🎯 گردونه داره می‌چرخه...\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
-
     await asyncio.sleep(1.5)
-
     weights = [w for w, _ in WHEEL_SEGMENTS]
     prizes = [p for _, p in WHEEL_SEGMENTS]
     prize = random.choices(prizes, weights=weights, k=1)[0]
     emoji = random.choice(WHEEL_EMOJIS)
-
     bal = get_balance(bot_data, sender_id)
     new_bal = bal + prize
     set_balance(bot_data, sender_id, new_bal)
     _set_cooldown(bot_data, str(sender_id), "wheel")
     _safe_save(save_data, bot_data)
-
     await _send(bot, chat_id,
         "🎉 **گردونه ایستاد!** 🎉\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n"
-        f"{emoji} **جایزه:** `+{prize:,}` واحد\n\n"
+        f"👤 **بازیکن:** {name}\n{emoji} **جایزه:** `+{prize:,}`\n\n"
         f"💎 **موجودی جدید:** `{new_bal:,}`\n\n"
         "🎁 **دوباره:** ۲۴ ساعت دیگه!\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
@@ -477,26 +487,20 @@ async def _spin_slot(bot, chat_id, sender_id, name, msg, bot_data, save_data):
     ok, remaining = _check_cooldown(bot_data, str(sender_id), "slot")
     if not ok:
         await _send(bot, chat_id,
-            "⏰ **هنوز آماده نیست!**\n\n"
-            "🎰 اسلات روزانه‌ست.\n"
+            f"⏰ **هنوز آماده نیست!**\n\n🎰 اسلات روزانه‌ست.\n"
             f"⌛ **باقی‌مونده:** {_fmt_time(remaining)}\n\n⚡ **FLUXBOT**",
             reply_to=msg.message_id)
         return True
-
     await _send(bot, chat_id,
         "🎰 **اسلات در حال چرخش...** 🎰\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n\n"
-        "🎰 | ❓ | ❓ | ❓ |\n\n"
+        f"👤 **بازیکن:** {name}\n\n🎰 | ❓ | ❓ | ❓ |\n\n"
         "🎲 داره می‌چرخه...\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
-
     await asyncio.sleep(1.5)
-
     r1 = random.choice(SLOT_SYMBOLS)
     r2 = random.choice(SLOT_SYMBOLS)
     r3 = random.choice(SLOT_SYMBOLS)
     slot_line = f"🎰 | {r1} | {r2} | {r3} |"
-
     if r1 == r2 == r3:
         prize = SLOT_JACKPOT
         bal = get_balance(bot_data, sender_id)
@@ -505,12 +509,11 @@ async def _spin_slot(bot, chat_id, sender_id, name, msg, bot_data, save_data):
         _set_cooldown(bot_data, str(sender_id), "slot")
         _safe_save(save_data, bot_data)
         await _send(bot, chat_id,
-            "🎉 **جکپات! جکپات!** 🎉\n━━━━━━━━━━━━━━━━━━━\n\n"
+            "🎉 **جکپات!** 🎉\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 **بازیکن:** {name}\n\n{slot_line}\n\n"
-            "✨ **۳ تا مثل هم!** ✨\n\n"
-            f"🏆 **جایزه:** `+{prize:,}` واحد\n"
+            f"🏆 **جایزه:** `+{prize:,}`\n"
             f"💎 **موجودی جدید:** `{new_bal:,}`\n\n"
-            "🎁 **دوباره:** ۲۴ ساعت دیگه!\n\n⚡ **FLUXBOT**",
+            "🎁 دوباره: ۲۴ ساعت دیگه!\n\n⚡ **FLUXBOT**",
             reply_to=msg.message_id)
     else:
         _set_cooldown(bot_data, str(sender_id), "slot")
@@ -518,9 +521,8 @@ async def _spin_slot(bot, chat_id, sender_id, name, msg, bot_data, save_data):
         await _send(bot, chat_id,
             "🎰 **اسلات ایستاد** 🎰\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 **بازیکن:** {name}\n\n{slot_line}\n\n"
-            "😢 **این بار نشد!**\n\n"
-            "💡 **برای برد:** ۳ نماد یکسان\n"
-            "🎁 **دوباره:** ۲۴ ساعت دیگه\n\n⚡ **FLUXBOT**",
+            "😢 **این بار نشد!**\n"
+            "💡 برای برد: ۳ نماد یکسان\n\n⚡ **FLUXBOT**",
             reply_to=msg.message_id)
     return True
 
@@ -529,42 +531,32 @@ async def _spin_slot(bot, chat_id, sender_id, name, msg, bot_data, save_data):
 async def _play_penalty(bot, chat_id, sender_id, name, msg, direction, amount, bot_data, save_data):
     if amount < MIN_BET:
         await _send(bot, chat_id,
-            f"⚠️ **حداقل مبلغ شرط `{MIN_BET:,}` واحده!**",
-            reply_to=msg.message_id)
+            f"⚠️ **حداقل شرط `{MIN_BET:,}`!**", reply_to=msg.message_id)
         return True
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
-            f"💎 موجودی: `{bal:,}`\n🎯 نیاز: `{amount:,}`",
+            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
             reply_to=msg.message_id)
         return True
-
     dir_emoji = {"چپ": "⬅️", "وسط": "⬆️", "راست": "➡️"}.get(direction, "🎯")
-
     await _send(bot, chat_id,
         "⚽ **پنالتی** ⚽\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n"
-        f"🎯 **جهت:** {dir_emoji} `{direction}`\n"
-        f"💰 **مقدار:** `{amount:,}`\n\n"
-        "🧤 دروازه‌بان آماده‌ست...\n\n⚡ **FLUXBOT**",
+        f"👤 **بازیکن:** {name}\n🎯 **جهت:** {dir_emoji} `{direction}`\n"
+        f"💰 **مقدار:** `{amount:,}`\n\n🧤 آماده...\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
-
     await asyncio.sleep(1.2)
     keeper = random.choice(["چپ", "وسط", "راست"])
     keeper_emoji = {"چپ": "⬅️", "وسط": "⬆️", "راست": "➡️"}.get(keeper, "🧤")
     won = (direction != keeper)
-
     if won:
         profit = amount * 2
         new_bal = bal + profit
     else:
         profit = -amount
         new_bal = max(MIN_BALANCE, bal - amount)
-
     set_balance(bot_data, sender_id, new_bal)
     _safe_save(save_data, bot_data)
-
     if won:
         result = (
             "⚽ **گلللللل!** ⚽\n━━━━━━━━━━━━━━━━━━━\n\n"
@@ -572,8 +564,7 @@ async def _play_penalty(bot, chat_id, sender_id, name, msg, direction, amount, b
             f"🎯 **شوت:** {dir_emoji} `{direction}`\n"
             f"🧤 **دروازه‌بان:** {keeper_emoji} `{keeper}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
-            "🎉 **توپ رفت تو دروازه!** 🎉\n"
-            f"📈 **سود (۲x):** `+{profit:,}`\n"
+            f"🎉 **گل!** 📈 **سود:** `+{profit:,}`\n"
             f"💎 **موجودی جدید:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     else:
@@ -583,10 +574,8 @@ async def _play_penalty(bot, chat_id, sender_id, name, msg, direction, amount, b
             f"🎯 **شوت:** {dir_emoji} `{direction}`\n"
             f"🧤 **دروازه‌بان:** {keeper_emoji} `{keeper}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
-            "😢 **دروازه‌بان توپ رو گرفت!**\n"
-            f"📉 **باخت:** `-{amount:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n"
-            "💡 دوباره تلاش کن!\n\n⚡ **FLUXBOT**"
+            f"😢 **باخت:** `-{amount:,}`\n"
+            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     await _send(bot, chat_id, result, reply_to=msg.message_id)
     return True
@@ -596,15 +585,12 @@ async def _play_penalty(bot, chat_id, sender_id, name, msg, direction, amount, b
 async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, save_data):
     if amount < MIN_BET:
         await _send(bot, chat_id,
-            f"⚠️ **حداقل مبلغ کد هدیه `{MIN_BET:,}` واحده!**",
-            reply_to=msg.message_id)
+            f"⚠️ **حداقل کد هدیه `{MIN_BET:,}`!**", reply_to=msg.message_id)
         return True
-
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
-            f"💎 موجودی تو: `{bal:,}`\n🎯 نیاز: `{amount:,}`",
+            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
             reply_to=msg.message_id)
         return True
 
@@ -626,45 +612,46 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
         f"🔑 **کد:** `{code}`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"📌 **استفاده:** `استفاده کد {code}`\n\n"
-        "⚠️ **نکات:**\n"
-        "├ 🔒 فقط یک بار\n"
-        "├ 🚫 خودت نتونی استفاده کنی\n"
-        "└ 💡 برای دوستت بفرست\n\n"
+        "⚠️ فقط یک بار | برای دوستت بفرست\n\n"
         "⚡ **FLUXBOT**"
     )
 
-    pv_ok = await _try_pv_send(bot, sender_id, dm_text)
+    ok, info = await _try_pv_send(bot, sender_id, dm_text)
 
-    if not pv_ok:
-        fallback = (
-            "⚠️ **پیوی ربات بسته‌ست!**\n\n"
-            "📌 کد رو اینجا نشون می‌دم:\n"
-            "⏱️ **فقط ۲ دقیقه — سریع سیو کن!**\n\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            f"🎁 **کد:** `{code}`\n"
+    if ok:
+        # PV موفق
+        await _send(bot, chat_id,
+            "✅ **کد هدیه ساخته شد!**\n\n"
             f"💰 **مبلغ:** `{amount:,}`\n"
-            "━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🔑 **استفاده:** `استفاده کد {code}`\n\n"
-            "💡 **دفعه بعد:**\n"
-            "├ به پیوی ربات برو\n"
-            "└ `شروع` رو بزن\n\n"
-            "⚡ **FLUXBOT**"
-        )
-        result = await _send(bot, chat_id, fallback, reply_to=msg.message_id)
-        mid = _extract_msg_id(result)
-        if mid:
-            try:
-                asyncio.create_task(_auto_delete(bot, chat_id, mid, 120))
-            except Exception as e:
-                print(f"⚠️ auto_delete task: {e}", flush=True)
+            "📩 **کد به پیوی شما ارسال شد.**\n\n"
+            "💡 پیوی ربات رو چک کن.",
+            reply_to=msg.message_id)
         return True
 
-    await _send(bot, chat_id,
-        "✅ **کد هدیه ساخته شد!**\n\n"
+    # PV ناموفق → Fallback به گروه
+    print(f"⚠️ [betting] PV failed, using group fallback. Info: {info}", flush=True)
+    fallback = (
+        "⚠️ **پیوی ربات بسته‌ست!**\n\n"
+        "📌 کد رو اینجا نشون می‌دم:\n"
+        "⏱️ **۲ دقیقه — سریع سیو کن!**\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"🎁 **کد:** `{code}`\n"
         f"💰 **مبلغ:** `{amount:,}`\n"
-        "📩 **کد به پیوی شما ارسال شد.**\n\n"
-        "💡 پیوی ربات رو چک کن.",
-        reply_to=msg.message_id)
+        "━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔑 **استفاده:** `استفاده کد {code}`\n\n"
+        "💡 **دفعه بعد:**\n"
+        "├ به پیوی ربات برو\n"
+        "├ `شروع` رو بزن\n"
+        "└ بعد `تست پیوی` بزن\n\n"
+        "⚡ **FLUXBOT**"
+    )
+    result = await _send(bot, chat_id, fallback, reply_to=msg.message_id)
+    mid = _extract_msg_id(result)
+    if mid:
+        try:
+            asyncio.create_task(_auto_delete(bot, chat_id, mid, 120))
+        except Exception as e:
+            print(f"⚠️ auto_delete task: {e}", flush=True)
     return True
 
 
@@ -673,19 +660,13 @@ async def _use_gift(bot, chat_id, sender_id, msg, code, bot_data, save_data):
     _ensure_gift_codes(bot_data)
     gift = bot_data["gift_codes"].get(code)
     if not gift:
-        await _send(bot, chat_id,
-            "❌ **کد هدیه نامعتبره!**",
-            reply_to=msg.message_id)
+        await _send(bot, chat_id, "❌ **کد نامعتبره!**", reply_to=msg.message_id)
         return True
     if gift.get("used"):
-        await _send(bot, chat_id,
-            "❌ **این کد قبلاً استفاده شده!**",
-            reply_to=msg.message_id)
+        await _send(bot, chat_id, "❌ **این کد قبلاً استفاده شده!**", reply_to=msg.message_id)
         return True
     if str(gift.get("creator")) == str(sender_id):
-        await _send(bot, chat_id,
-            "❌ **نمی‌تونی از کد خودت استفاده کنی!**",
-            reply_to=msg.message_id)
+        await _send(bot, chat_id, "❌ **نمی‌تونی از کد خودت استفاده کنی!**", reply_to=msg.message_id)
         return True
     amount = int(gift.get("amount", 0))
     if amount <= 0:
@@ -699,7 +680,7 @@ async def _use_gift(bot, chat_id, sender_id, msg, code, bot_data, save_data):
     gift["used_at"] = time.time()
     _safe_save(save_data, bot_data)
     await _send(bot, chat_id,
-        "🎉 **کد هدیه دریافت شد!** 🎉\n━━━━━━━━━━━━━━━━━━━\n\n"
+        "🎉 **کد دریافت شد!** 🎉\n━━━━━━━━━━━━━━━━━━━\n\n"
         f"🔑 **کد:** `{code}`\n"
         f"💰 **مبلغ:** `+{amount:,}`\n"
         f"💎 **موجودی جدید:** `{new_bal:,}`\n\n⚡ **FLUXBOT**",
@@ -716,15 +697,12 @@ async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_d
         await _send(bot, chat_id, "❌ **نمی‌تونی به خودت هدیه بدی!**", reply_to=msg.message_id)
         return True
     if amount < MIN_BET:
-        await _send(bot, chat_id,
-            f"⚠️ **حداقل مبلغ هدیه `{MIN_BET:,}` واحده!**",
-            reply_to=msg.message_id)
+        await _send(bot, chat_id, f"⚠️ **حداقل `{MIN_BET:,}`!**", reply_to=msg.message_id)
         return True
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
-            f"💎 موجودی: `{bal:,}`\n🎯 نیاز: `{amount:,}`",
+            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
             reply_to=msg.message_id)
         return True
     new_sender = bal - amount
@@ -739,6 +717,7 @@ async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_d
         f"💰 **مبلغ:** `{amount:,}`\n\n"
         f"💎 **موجودی جدید تو:** `{new_sender:,}`\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
+    # اطلاع به دریافت‌کننده (اختیاری - اگه PV بسته باشه، بی‌خیال)
     await _try_pv_send(bot, receiver,
         "🎁 **هدیه جدید!** 🎁\n━━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 **از:** {name}\n"
@@ -769,9 +748,7 @@ async def _boost_balance(bot, chat_id, sender_id, name, msg, amount, bot_data, s
 # ═══════════ 🎲 شرط عمومی ═══════════
 async def _play_bet(bot, chat_id, sender_id, name, msg, guess_raw, amount, bot_data, save_data):
     if amount < MIN_BET:
-        await _send(bot, chat_id,
-            f"⚠️ **حداقل مبلغ شرط `{MIN_BET:,}` واحده!**",
-            reply_to=msg.message_id)
+        await _send(bot, chat_id, f"⚠️ **حداقل `{MIN_BET:,}`!**", reply_to=msg.message_id)
         return True
     if guess_raw in ("شیر", "خط"):
         return await _play_coinflip(bot, chat_id, sender_id, name, msg,
@@ -785,9 +762,7 @@ async def _play_bet(bot, chat_id, sender_id, name, msg, guess_raw, amount, bot_d
         await _send(bot, chat_id, "⚠️ **نوع شرط نامعتبره!**", reply_to=msg.message_id)
         return True
     if gn < 1 or gn > 6:
-        await _send(bot, chat_id,
-            "⚠️ **عدد تاس باید بین ۱ تا ۶ باشه!**",
-            reply_to=msg.message_id)
+        await _send(bot, chat_id, "⚠️ **عدد ۱ تا ۶!**", reply_to=msg.message_id)
         return True
     return await _play_dice_number(bot, chat_id, sender_id, name, msg,
                                     gn, amount, bot_data, save_data)
@@ -797,16 +772,13 @@ async def _play_dice_number(bot, chat_id, sender_id, name, msg, guess, amount, b
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
-            f"💎 موجودی: `{bal:,}`\n🎯 نیاز: `{amount:,}`",
+            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
             reply_to=msg.message_id)
         return True
     await _send(bot, chat_id,
         "🎲 **تاس عددی** 🎲\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n"
-        f"🎯 **شرط:** عدد `{guess}`\n"
-        f"💰 **مقدار:** `{amount:,}`\n\n"
-        "🎲 در حال پرتاب...\n\n⚡ **FLUXBOT**",
+        f"👤 **بازیکن:** {name}\n🎯 **شرط:** عدد `{guess}`\n"
+        f"💰 **مقدار:** `{amount:,}`\n\n🎲 در حال پرتاب...\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
     await asyncio.sleep(1.2)
     dice = random.randint(1, 6)
@@ -823,25 +795,20 @@ async def _play_dice_number(bot, chat_id, sender_id, name, msg, guess, amount, b
     if won:
         result = (
             "🎰 **نتیجه** 🎰\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 **بازیکن:** {name}\n"
-            f"🎯 **شرط:** عدد `{guess}`\n"
+            f"👤 **بازیکن:** {name}\n🎯 **شرط:** عدد `{guess}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
             f"🎲 **تاس:** {dice_emoji} **{dice}**\n\n"
-            f"🎉 **بردی!** 🎉\n"
-            f"📈 **سود (۳x):** `+{profit:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
+            f"🎉 **بردی!** 📈 **سود:** `+{profit:,}`\n"
+            f"💎 **موجودی:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     else:
         result = (
             "🎰 **نتیجه** 🎰\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 **بازیکن:** {name}\n"
-            f"🎯 **شرط:** عدد `{guess}`\n"
+            f"👤 **بازیکن:** {name}\n🎯 **شرط:** عدد `{guess}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
             f"🎲 **تاس:** {dice_emoji} **{dice}**\n\n"
-            f"😢 **باختی!**\n"
-            f"📉 **باخت:** `-{amount:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n"
-            "💡 دوباره تلاش کن!\n\n⚡ **FLUXBOT**"
+            f"😢 **باختی!** 📉 **باخت:** `-{amount:,}`\n"
+            f"💎 **موجودی:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     await _send(bot, chat_id, result, reply_to=msg.message_id)
     return True
@@ -851,16 +818,13 @@ async def _play_dice_evenodd(bot, chat_id, sender_id, name, msg, choice, amount,
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
-            f"💎 موجودی: `{bal:,}`\n🎯 نیاز: `{amount:,}`",
+            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
             reply_to=msg.message_id)
         return True
     await _send(bot, chat_id,
         "🎲 **تاس زوج/فرد** 🎲\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n"
-        f"🎯 **شرط:** `{choice}`\n"
-        f"💰 **مقدار:** `{amount:,}`\n\n"
-        "🎲 در حال پرتاب...\n\n⚡ **FLUXBOT**",
+        f"👤 **بازیکن:** {name}\n🎯 **شرط:** `{choice}`\n"
+        f"💰 **مقدار:** `{amount:,}`\n\n🎲 در حال پرتاب...\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
     await asyncio.sleep(1.2)
     dice = random.randint(1, 6)
@@ -879,25 +843,20 @@ async def _play_dice_evenodd(bot, chat_id, sender_id, name, msg, choice, amount,
     if won:
         result = (
             "🎰 **نتیجه** 🎰\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 **بازیکن:** {name}\n"
-            f"🎯 **شرط:** `{choice}`\n"
+            f"👤 **بازیکن:** {name}\n🎯 **شرط:** `{choice}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
             f"🎲 **تاس:** {dice_emoji} **{dice}** ({parity})\n\n"
-            f"🎉 **بردی!** 🎉\n"
-            f"📈 **سود (۲x):** `+{profit:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
+            f"🎉 **بردی!** 📈 **سود:** `+{profit:,}`\n"
+            f"💎 **موجودی:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     else:
         result = (
             "🎰 **نتیجه** 🎰\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 **بازیکن:** {name}\n"
-            f"🎯 **شرط:** `{choice}`\n"
+            f"👤 **بازیکن:** {name}\n🎯 **شرط:** `{choice}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
             f"🎲 **تاس:** {dice_emoji} **{dice}** ({parity})\n\n"
-            f"😢 **باختی!**\n"
-            f"📉 **باخت:** `-{amount:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n"
-            "💡 دوباره تلاش کن!\n\n⚡ **FLUXBOT**"
+            f"😢 **باختی!** 📉 **باخت:** `-{amount:,}`\n"
+            f"💎 **موجودی:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     await _send(bot, chat_id, result, reply_to=msg.message_id)
     return True
@@ -907,16 +866,13 @@ async def _play_coinflip(bot, chat_id, sender_id, name, msg, choice, amount, bot
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
-            f"💎 موجودی: `{bal:,}`\n🎯 نیاز: `{amount:,}`",
+            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
             reply_to=msg.message_id)
         return True
     await _send(bot, chat_id,
         "🪙 **شیر یا خط** 🪙\n━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👤 **بازیکن:** {name}\n"
-        f"🎯 **شرط:** `{choice}`\n"
-        f"💰 **مقدار:** `{amount:,}`\n\n"
-        "🪙 در حال پرتاب...\n\n⚡ **FLUXBOT**",
+        f"👤 **بازیکن:** {name}\n🎯 **شرط:** `{choice}`\n"
+        f"💰 **مقدار:** `{amount:,}`\n\n🪙 در حال پرتاب...\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
     await asyncio.sleep(1.2)
     result_side = random.choice(["شیر", "خط"])
@@ -933,37 +889,32 @@ async def _play_coinflip(bot, chat_id, sender_id, name, msg, choice, amount, bot
     if won:
         result = (
             "🪙 **نتیجه** 🪙\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 **بازیکن:** {name}\n"
-            f"🎯 **شرط:** `{choice}`\n"
+            f"👤 **بازیکن:** {name}\n🎯 **شرط:** `{choice}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
             f"🪙 **نتیجه:** {result_emoji} **{result_side}**\n\n"
-            f"🎉 **بردی!** 🎉\n"
-            f"📈 **سود (نصف):** `+{profit:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
+            f"🎉 **بردی!** 📈 **سود:** `+{profit:,}`\n"
+            f"💎 **موجودی:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     else:
         result = (
             "🪙 **نتیجه** 🪙\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 **بازیکن:** {name}\n"
-            f"🎯 **شرط:** `{choice}`\n"
+            f"👤 **بازیکن:** {name}\n🎯 **شرط:** `{choice}`\n"
             f"💰 **مقدار:** `{amount:,}`\n\n"
             f"🪙 **نتیجه:** {result_emoji} **{result_side}**\n\n"
-            f"😢 **باختی!**\n"
-            f"📉 **باخت:** `-{amount:,}`\n"
-            f"💎 **موجودی جدید:** `{new_bal:,}`\n\n"
-            "💡 دوباره تلاش کن!\n\n⚡ **FLUXBOT**"
+            f"😢 **باختی!** 📉 **باخت:** `-{amount:,}`\n"
+            f"💎 **موجودی:** `{new_bal:,}`\n\n⚡ **FLUXBOT**"
         )
     await _send(bot, chat_id, result, reply_to=msg.message_id)
     return True
 
 
-# ═══════════ 📖 متن راهنما (کوتاه‌شده) ═══════════
+# ═══════════ 📖 راهنما ═══════════
 def _get_help_text(bal):
     return (
         "🎰 **راهنمای شرط بندی** 🎰\n"
         "━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💎 **موجودی تو:** `{bal:,}`\n"
-        f"📌 کف: `{MIN_BALANCE:,}` | حداقل شرط: `{MIN_BET:,}`\n\n"
+        f"💎 **موجودی:** `{bal:,}`\n"
+        f"📌 کف: `{MIN_BALANCE:,}` | حداقل: `{MIN_BET:,}`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🎲 **۱. تاس عددی (۳x)**\n"
         "`شرط بندی 3 10000`\n"
@@ -981,13 +932,13 @@ def _get_help_text(bal):
         "`شرط بندی پنالتی چپ مقدار 5000`\n"
         "(چپ / وسط / راست)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎡 **۵. گردونه شانس (روزانه)**\n"
+        "🎡 **۵. گردونه (روزانه)**\n"
         "`گردونه`\n"
-        "🎁 جایزه: **۱۰۰K تا ۵۰۰K**\n\n"
+        "🎁 **۱۰۰K تا ۵۰۰K**\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎰 **۶. اسلات ماشین (روزانه)**\n"
+        "🎰 **۶. اسلات (روزانه)**\n"
         "`اسلات ماشین`\n"
-        "🎁 ۳ نماد یکسان → **۱ میلیون**\n\n"
+        "🎁 ۳ نماد یکسان → **۱M**\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🎁 **کد هدیه**\n"
         "├ `ساخت کد هدیه مقدار 10000`\n"
@@ -997,17 +948,17 @@ def _get_help_text(bal):
         "`ارسال هدیه [شناسه] مقدار 5000`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "💰 **دستورات دیگه:**\n"
-        "├ `موجودی` → نمایش موجودی\n"
+        "├ `موجودی` → موجودی\n"
         "├ `شناسه` → شناسه خودت\n"
+        "├ `تست پیوی` → تست PV\n"
         "└ `راهنما شرط بندی` → این متن\n\n"
         "⚠️ **نکات:**\n"
-        f"├ 💎 کف موجودی: `{MIN_BALANCE:,}`\n"
-        "├ 🎲 مقدار شرط ≤ موجودی\n"
-        "└ 🔒 مدیریت: `شرط بندی باز/بسته`\n\n"
+        f"├ 💎 کف: `{MIN_BALANCE:,}`\n"
+        "├ 🎲 شرط ≤ موجودی\n"
+        "└ 🔒 `شرط بندی باز/بسته`\n\n"
         "⚡ **FLUXBOT**"
     )
 
 
 def cleanup():
-    """بدون state موندگار"""
     pass
