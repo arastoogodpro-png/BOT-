@@ -933,7 +933,8 @@ PROFANITY_LIST = [
     "تخم سگ","مغز کیر","کص مغز","نناموس","بی حیا","لختی","برهنه","کیرمغز",
 ]
 
-_PROFANITY_NORMALIZED = [normalize_text(w) for w in PROFANITY_LIST if normalize_text(w)]
+# 🆕 Lazy init — چون normalize_text پایین‌تر تعریف شده، اینجا None می‌گذاریم
+_PROFANITY_NORMALIZED = None
 
 JOKES = [
     "به یارو میگن چرا زنتو میزنی؟ میگه چون عاشقشم! 😂",
@@ -1802,6 +1803,10 @@ def contains_profanity(text):
     if not text: return None
     n = normalize_text(text)
     if not n: return None
+    # 🆕 Lazy init امن — چون normalize_text الان تعریف شده
+    global _PROFANITY_NORMALIZED
+    if _PROFANITY_NORMALIZED is None:
+        _PROFANITY_NORMALIZED = [normalize_text(w) for w in PROFANITY_LIST if normalize_text(w)]
     for nw in _PROFANITY_NORMALIZED:
         if nw and nw in n: return nw
     return None
