@@ -1,5 +1,6 @@
 # games/betting.py
-# 🎰 بازی شرط بندی - نسخه نهایی با PV Debug
+# 🎰 بازی شرط بندی - نسخه نهایی کامل
+# ✅ فیکس PV با تبدیل u0 → b0
 import time
 import random
 import asyncio
@@ -215,49 +216,60 @@ async def _auto_delete(bot, chat_id, message_id, delay):
         print(f"⚠️ betting auto_delete: {e}", flush=True)
 
 
+def _to_pv_id(user_id):
+    """
+    تبدیل شناسه کاربر به شناسه چت خصوصی
+    u0XXXX → b0XXXX
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return []
+    variants = []
+    if uid.startswith("u"):
+        variants.append("b" + uid[1:])   # u0 → b0
+        variants.append(uid)              # خود u0
+    elif uid.startswith("b"):
+        variants.append(uid)              # خود b0
+        variants.append("u" + uid[1:])   # b0 → u0
+    elif uid.startswith("g") or uid.startswith("c"):
+        variants.append(uid)              # گروه
+    else:
+        variants.append("u" + uid)        # اضافه کردن u
+        variants.append("b" + uid)        # اضافه کردن b
+    # حذف تکراری
+    seen = set()
+    result = []
+    for v in variants:
+        if v and v not in seen:
+            result.append(v)
+            seen.add(v)
+    return result
+
+
 async def _try_pv_send(bot, user_id, text):
     """
-    تلاش قدرتمند برای ارسال به پیوی
-    برمی‌گردونه: (موفقیت: bool, جزئیات: str)
+    ارسال PV با تبدیل u0 → b0 (فیکس اصلی!)
     """
     uid = str(user_id or "").strip()
     if not uid:
         return False, "شناسه خالیه"
 
-    print(f"🔍 [PV DEBUG] user_id raw = {uid!r}", flush=True)
+    print(f"🔍 [PV] user_id = {uid!r}", flush=True)
 
-    # ساخت همه فرمت‌های ممکن
-    variants = []
-
-    def add(v):
-        if v and v not in variants:
-            variants.append(v)
-
-    add(uid)
-    # اگه u داره، بدون u هم امتحان کن
-    if uid.startswith("u") and len(uid) > 1:
-        add(uid[1:])
-    # اگه u نداره، با u هم امتحان کن
-    elif not uid.startswith(("u", "b", "g", "c", "U")):
-        add("u" + uid)
-    # کپی با b (بعضی روبیکاها با b کار می‌کنن)
-    if uid.startswith("u"):
-        add("b" + uid[1:])
-
-    print(f"🔍 [PV DEBUG] variants = {variants}", flush=True)
+    variants = _to_pv_id(uid)
+    print(f"🔍 [PV] variants = {variants}", flush=True)
 
     errors = []
     for fmt in variants:
         try:
-            print(f"🔍 [PV DEBUG] trying chat_id = {fmt!r}", flush=True)
-            # تلاش ساده
+            print(f"🔍 [PV] trying chat_id = {fmt!r}", flush=True)
             await bot.send_message(chat_id=fmt, text=text)
-            print(f"✅ [PV DEBUG] SUCCESS with {fmt!r}", flush=True)
+            print(f"✅ [PV] SUCCESS with {fmt!r}", flush=True)
             return True, f"موفق با {fmt}"
         except Exception as e:
-            err = f"{type(e).__name__}: {e}"
-            errors.append(f"{fmt} → {err[:200]}")
-            print(f"⚠️ [PV DEBUG] FAILED {fmt!r}: {err[:300]}", flush=True)
+            err = f"{type(e).__name__}: {str(e)[:150]}"
+            errors.append(f"{fmt} → {err}")
+            print(f"⚠️ [PV] FAILED {fmt!r}: {err}", flush=True)
             await asyncio.sleep(0.3)
 
     return False, " | ".join(errors) if errors else "خطای نامشخص"
@@ -265,7 +277,6 @@ async def _try_pv_send(bot, user_id, text):
 
 # ═══════════ تشخیص راهنما ═══════════
 def _is_help_cmd(raw, clean):
-    """تشخیص راهنما با حداکثر تلرانس"""
     candidates = []
     for s in (raw, clean):
         if not s:
@@ -293,7 +304,6 @@ def _is_help_cmd(raw, clean):
         if c in exact_matches:
             return True
 
-    # Fallback: هرچی "شرط" و "بندی" داره و کوتاهه
     for c in candidates:
         if c and len(c) <= 25 and "شرط" in c and "بندی" in c:
             return True
@@ -334,7 +344,7 @@ async def _handle_inner(ctx):
     text_low = text_norm.lower()
     t_nospace = text_low.replace(" ", "")
 
-    # ═══ 🔬 تست پیوی (Debug) ═══
+    # ═══ 🔬 تست پیوی ═══
     if text_low == "تست پیوی" or raw_low == "تست پیوی":
         ok, info = await _try_pv_send(bot, sender_id, "✅ تست موفق! پیوی کار می‌کنه.")
         status = "✅ پیوی باز شد" if ok else "❌ پیوی کار نمی‌کنه"
@@ -342,13 +352,12 @@ async def _handle_inner(ctx):
             f"🔬 **تست پیوی**\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 **شناسه تو:** `{sender_id}`\n"
             f"{status}\n\n"
-            f"📋 **جزئیات:**\n{info[:500]}\n\n"
-            f"💡 اگه خطا داشت، همین متن رو برای سازنده بفرست.\n\n"
-            "⚡ **FLUXBOT**",
+            f"📋 **جزئیات:**\n{info[:600]}\n\n"
+            f"⚡ **FLUXBOT**",
             reply_to=msg.message_id)
         return True
 
-    # ═══ 📖 راهنما (اول از همه) ═══
+    # ═══ 📖 راهنما ═══
     if _is_help_cmd(raw, text):
         print(f"🎯 [betting] HELP triggered", flush=True)
         bal = get_balance(bot_data, sender_id)
@@ -530,8 +539,7 @@ async def _spin_slot(bot, chat_id, sender_id, name, msg, bot_data, save_data):
 # ═══════════ ⚽ پنالتی ═══════════
 async def _play_penalty(bot, chat_id, sender_id, name, msg, direction, amount, bot_data, save_data):
     if amount < MIN_BET:
-        await _send(bot, chat_id,
-            f"⚠️ **حداقل شرط `{MIN_BET:,}`!**", reply_to=msg.message_id)
+        await _send(bot, chat_id, f"⚠️ **حداقل شرط `{MIN_BET:,}`!**", reply_to=msg.message_id)
         return True
     bal = get_balance(bot_data, sender_id)
     if bal < amount:
@@ -619,7 +627,6 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
     ok, info = await _try_pv_send(bot, sender_id, dm_text)
 
     if ok:
-        # PV موفق
         await _send(bot, chat_id,
             "✅ **کد هدیه ساخته شد!**\n\n"
             f"💰 **مبلغ:** `{amount:,}`\n"
@@ -628,8 +635,8 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
             reply_to=msg.message_id)
         return True
 
-    # PV ناموفق → Fallback به گروه
-    print(f"⚠️ [betting] PV failed, using group fallback. Info: {info}", flush=True)
+    # Fallback به گروه
+    print(f"⚠️ [betting] PV failed: {info}", flush=True)
     fallback = (
         "⚠️ **پیوی ربات بسته‌ست!**\n\n"
         "📌 کد رو اینجا نشون می‌دم:\n"
@@ -641,7 +648,7 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
         f"🔑 **استفاده:** `استفاده کد {code}`\n\n"
         "💡 **دفعه بعد:**\n"
         "├ به پیوی ربات برو\n"
-        "├ `شروع` رو بزن\n"
+        "├ `/start` رو بزن\n"
         "└ بعد `تست پیوی` بزن\n\n"
         "⚡ **FLUXBOT**"
     )
@@ -717,7 +724,7 @@ async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_d
         f"💰 **مبلغ:** `{amount:,}`\n\n"
         f"💎 **موجودی جدید تو:** `{new_sender:,}`\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
-    # اطلاع به دریافت‌کننده (اختیاری - اگه PV بسته باشه، بی‌خیال)
+    # اطلاع به دریافت‌کننده (اگه PV باز بود)
     await _try_pv_send(bot, receiver,
         "🎁 **هدیه جدید!** 🎁\n━━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 **از:** {name}\n"
