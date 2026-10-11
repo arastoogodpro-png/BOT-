@@ -1,7 +1,5 @@
 # games/betting.py
-# 🎰 بازی شرط بندی - نسخه نهایی
-# ✅ موجودی جدا برای هر گروه
-# ✅ تلاش‌های چندگانه برای PV
+# 🎰 بازی شرط بندی - نسخه نهایی بدون باگ
 import time
 import random
 import asyncio
@@ -28,6 +26,7 @@ SLOT_JACKPOT = 1_000_000
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
+# ═══════════ نرمال‌سازی ═══════════
 def _normalize(text):
     if not text: return ""
     s = str(text)
@@ -46,14 +45,12 @@ def _is_special_user(sender_id, sender_display):
 
 # ═══════════ داده‌ها ═══════════
 def _ensure_balances(bot_data):
-    """ساختار جدید: {chat_id: {user_id: amount}}"""
     if "balances" not in bot_data or not isinstance(bot_data.get("balances"), dict):
         bot_data["balances"] = {}
         return
     b = bot_data["balances"]
-    # تشخیص و مهاجرت از فرمت قدیمی (flat) به جدید (per-group)
     needs_migration = False
-    for k, v in list(b.items())[:5]:
+    for k, v in list(b.items())[:10]:
         if not isinstance(v, dict):
             needs_migration = True
             break
@@ -78,7 +75,6 @@ def _ensure_pv_chats(bot_data):
 
 
 def get_balance(bot_data, chat_id, user_id):
-    """موجودی کاربر در گروه مشخص"""
     _ensure_balances(bot_data)
     cid = str(chat_id)
     uid = str(user_id)
@@ -94,7 +90,6 @@ def get_balance(bot_data, chat_id, user_id):
 
 
 def set_balance(bot_data, chat_id, user_id, amount):
-    """تنظیم موجودی با کف MIN_BALANCE"""
     _ensure_balances(bot_data)
     cid = str(chat_id)
     uid = str(user_id)
@@ -229,36 +224,36 @@ def _save_pv_chat_id(bot_data, save_data, user_id, chat_id):
 
 
 async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, save_data=None):
-    """ارسال PV با تلاش‌های متعدد"""
+    """ارسال PV — با حداکثر تلاش"""
     uid = str(user_id or "").strip()
     if not uid: return False, "شناسه خالیه"
 
     print(f"🔍 [PV] user_id={uid!r} current={current_chat_id!r}", flush=True)
 
-    # اگه current b0 هست
+    # ۱. اگه current chat_id b0 هست
     if current_chat_id and str(current_chat_id).startswith("b"):
         if bot_data is not None:
             _save_pv_chat_id(bot_data, save_data, uid, current_chat_id)
         try:
             await bot.send_message(chat_id=str(current_chat_id), text=text)
-            print(f"✅ [PV] SUCCESS with current b0", flush=True)
+            print(f"✅ [PV] SUCCESS current b0", flush=True)
             return True, "موفق با b0 فعلی"
         except Exception as e:
-            print(f"⚠️ [PV] current b0 failed: {e}", flush=True)
+            print(f"⚠️ [PV] current failed: {e}", flush=True)
 
-    # از حافظه
+    # ۲. از حافظه
     if bot_data is not None:
         cached = _get_pv_chat_id(bot_data, uid)
         if cached:
             try:
                 await bot.send_message(chat_id=cached, text=text)
-                print(f"✅ [PV] SUCCESS cached {cached}", flush=True)
+                print(f"✅ [PV] SUCCESS cached", flush=True)
                 return True, "موفق با b0 ذخیره‌شده"
             except Exception as e:
                 print(f"⚠️ [PV] cached failed: {e}", flush=True)
 
-    # get_chat_info
-    for method_name in ("get_chat_info", "get_chat", "get_user"):
+    # ۳. get_chat_info (permissive)
+    for method_name in ("get_chat_info", "get_chat"):
         if not hasattr(bot, method_name): continue
         try:
             print(f"🔍 [PV] trying {method_name}", flush=True)
@@ -269,30 +264,30 @@ async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, 
                 if isinstance(data, dict):
                     chat = data.get("chat", data)
                     if isinstance(chat, dict):
-                        for key in ("chat_id", "object_guid", "object_id", "guid", "id"):
+                        for key in ("chat_id", "object_guid", "object_id", "guid"):
                             real_id = chat.get(key)
-                            if real_id and str(real_id).startswith("b"):
-                                real_id_str = str(real_id)
-                                if bot_data is not None:
+                            if not real_id: continue
+                            real_id_str = str(real_id)
+                            if real_id_str == uid: continue
+                            try:
+                                await bot.send_message(chat_id=real_id_str, text=text)
+                                print(f"✅ [PV] SUCCESS {method_name} {real_id_str}", flush=True)
+                                if bot_data is not None and real_id_str.startswith("b"):
                                     _save_pv_chat_id(bot_data, save_data, uid, real_id_str)
-                                try:
-                                    await bot.send_message(chat_id=real_id_str, text=text)
-                                    print(f"✅ [PV] SUCCESS {method_name} {real_id_str}", flush=True)
-                                    return True, f"موفق با {method_name}"
-                                except: pass
+                                return True, f"موفق با {method_name}"
+                            except Exception as e:
+                                print(f"⚠️ [PV] {method_name} send {real_id_str} failed: {e}", flush=True)
         except Exception as e:
             print(f"⚠️ [PV] {method_name} failed: {e}", flush=True)
 
-    # تلاش‌های مستقیم
+    # ۴. تلاش‌های مستقیم
     base = uid[1:] if uid.startswith("u") else uid
-    variants = [uid, base, "b" + base, "b" + uid]
-    seen = set()
-    unique = []
+    variants = [uid, "b" + base, base]
+    seen, unique = set(), []
     for v in variants:
         if v and v not in seen:
             unique.append(v); seen.add(v)
 
-    errors = []
     for fmt in unique:
         try:
             print(f"🔍 [PV] trying direct {fmt}", flush=True)
@@ -300,34 +295,33 @@ async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, 
             print(f"✅ [PV] SUCCESS direct {fmt}", flush=True)
             return True, f"موفق با {fmt}"
         except Exception as e:
-            errors.append(f"{fmt}: {str(e)[:80]}")
+            print(f"⚠️ [PV] direct {fmt} failed: {e}", flush=True)
             await asyncio.sleep(0.2)
 
-    return False, "ناموفق: " + " | ".join(errors[:3])
+    return False, "همه روش‌ها ناموفق"
 
 
-# ═══════════ Help ═══════════
+# ═══════════ ✅ تشخیص راهنما (فیکس شده) ═══════════
 def _is_help_cmd(raw, clean):
-    candidates = []
+    """
+    فقط دستورات دقیق راهنما رو تشخیص می‌ده
+    شرط بندی تاس فرد مقدار 50000 → راهنما نمیاد ✅
+    """
+    exact = {
+        "شرط بندی", "شرطبندی",
+        "اموزش شرط بندی", "اموزششرطبندی",
+        "آموزش شرط بندی", "آموزششرطبندی",
+        "راهنما شرط بندی", "راهنماشرطبندی",
+        "راهنمای شرط بندی", "راهنمایشرطبندی",
+    }
     for s in (raw, clean):
         if not s: continue
-        s_str = str(s).strip()
-        if not s_str: continue
-        norm = _normalize(s_str)
-        candidates.append(norm)
-        candidates.append(norm.replace(" ", ""))
-        candidates.append(norm.lower())
-        candidates.append(norm.replace(" ", "").lower())
-
-    exact = {
-        "شرط بندی", "شرطبندی", "اموزش شرط بندی", "اموزششرطبندی",
-        "آموزششرطبندی", "آموزش شرط بندی", "راهنما شرط بندی",
-        "راهنماشرطبندی", "راهنمای شرط بندی", "راهنمایشرطبندی",
-    }
-    for c in candidates:
-        if c and c in exact: return True
-    for c in candidates:
-        if c and len(c) <= 25 and "شرط" in c and "بندی" in c: return True
+        norm = _normalize(s)
+        if not norm: continue
+        if norm in exact: return True
+        if norm.replace(" ", "") in exact: return True
+        if norm.lower() in exact: return True
+        if norm.replace(" ", "").lower() in exact: return True
     return False
 
 
@@ -358,7 +352,6 @@ async def _handle_inner(ctx):
     if not isinstance(bot_data, dict):
         return False
 
-    # اگه chat_id با b شروع میشه، PV هست - ذخیره کن
     if str(chat_id).startswith("b"):
         _save_pv_chat_id(bot_data, save_data, sender_id, chat_id)
 
@@ -392,6 +385,7 @@ async def _handle_inner(ctx):
 
     # ═══ 📖 راهنما ═══
     if _is_help_cmd(raw, text):
+        print(f"🎯 [betting] HELP triggered: {raw!r}", flush=True)
         bal = get_balance(bot_data, chat_id, sender_id)
         _safe_save(save_data, bot_data)
         await _send_long(bot, chat_id, _get_help_text(bal), reply_to=msg.message_id)
@@ -620,7 +614,7 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
     bot_data["gift_codes"][code] = {
         "creator": str(sender_id),
         "amount": amount,
-        "chat_id": str(chat_id),  # گروه سازنده
+        "chat_id": str(chat_id),
         "created_at": time.time(),
         "used": False,
         "used_by": None,
@@ -650,7 +644,7 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
             reply_to=msg.message_id)
         return True
 
-    # Fallback به گروه
+    # Fallback
     fallback = (
         "⚠️ **پیوی ربات بسته‌ست!**\n\n"
         "📌 کد اینجا نشون داده می‌شه:\n"
@@ -687,7 +681,6 @@ async def _use_gift(bot, chat_id, sender_id, msg, code, bot_data, save_data):
     amount = int(gift.get("amount", 0))
     if amount <= 0:
         await _send(bot, chat_id, "❌ **کد معتبر نیست!**", reply_to=msg.message_id); return True
-    # استفاده در گروه فعلی
     bal = get_balance(bot_data, chat_id, sender_id)
     new_bal = bal + amount
     set_balance(bot_data, chat_id, sender_id, new_bal)
@@ -728,7 +721,7 @@ async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_d
         f"👤 **از:** {name}\n"
         f"🎯 **به:** `{receiver}`\n"
         f"💰 **مبلغ:** `{amount:,}`\n\n"
-        f"💎 **موجودی جدید تو در این گروه:** `{new_sender:,}`\n\n⚡ **FLUXBOT**",
+        f"💎 **موجودی جدید تو:** `{new_sender:,}`\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
     return True
 
@@ -913,14 +906,16 @@ def _get_help_text(bal):
         f"🎯 **هر گروه موجودی جدا داره!**\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🎲 **۱. تاس عددی (۳x)**\n"
-        "`شرط بندی 3 10000`\n\n"
+        "`شرط بندی 3 10000`\n"
+        "`شرط بندی تاس 5 مقدار 5000`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🎲 **۲. تاس زوج/فرد (۲x)**\n"
         "`شرط بندی زوج 5000`\n"
         "`شرط بندی فرد 3000`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🪙 **۳. شیر یا خط (نصف)**\n"
-        "`شرط بندی شیر 2000`\n\n"
+        "`شرط بندی شیر 2000`\n"
+        "`شرط بندی خط 5000`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚽ **۴. پنالتی (۲x)**\n"
         "`شرط بندی پنالتی چپ مقدار 5000`\n"
