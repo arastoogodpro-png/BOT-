@@ -87,20 +87,45 @@ def _strip_zwnj(s):
 
 
 # ================== 🔄 Two-Word Flexible Command Matcher ==================
-ON_WORDS = {_strip_zwnj(w) for w in {
-    "باز", "روشن", "فعال", "بازکردن", "بازکن",
-    "on", "enable", "روشن‌کن", "بازش",
+# 🔒 قفل پیام‌ها (لینک، آیدی، فحش، اسپم، فوروارد، گیف، هایپرلینک)
+#   "X قفل" / "X بسته" / "X فعال" / "X روشن" → فعال (پیام پاک می‌شه)
+#   "X باز" / "X خاموش" / "X غیرفعال"       → غیرفعال (پیام پاک نمی‌شه)
+FILTER_ON = {_strip_zwnj(w) for w in {
+    "فعال", "روشن", "قفل", "بسته", "بستن", "ببند",
+    "فعال‌کن", "روشن‌کن", "قفلش",
+    "on", "enable",
 }}
-OFF_WORDS = {_strip_zwnj(w) for w in {
-    "بسته", "خاموش", "غیرفعال", "قفل", "بستن", "ببند",
-    "off", "disable", "خاموش‌کن", "قفلش",
+FILTER_OFF = {_strip_zwnj(w) for w in {
+    "غیرفعال", "خاموش", "باز", "بازکردن", "بازکن", "بازش",
+    "خاموش‌کن", "غیرفعال‌کن",
+    "off", "disable",
 }}
 
+# 🎰 فیچرها (سخنگو، شرط بندی، خوش‌آمدگویی، خداحافظی)
+#   "X فعال" / "X روشن" / "X باز"              → روشن
+#   "X غیرفعال" / "X خاموش" / "X بسته" / "X قفل" → خاموش
+FEATURE_ON = {_strip_zwnj(w) for w in {
+    "فعال", "روشن", "باز", "بازکردن", "بازکن", "بازش",
+    "فعال‌کن", "روشن‌کن",
+    "on", "enable",
+}}
+FEATURE_OFF = {_strip_zwnj(w) for w in {
+    "غیرفعال", "خاموش", "بسته", "بستن", "ببند", "قفل", "قفلش",
+    "خاموش‌کن", "غیرفعال‌کن",
+    "off", "disable",
+}}
 
-def match_two_word_cmd(text, word):
+# پیش‌فرض = قفل پیام
+ON_WORDS = FILTER_ON
+OFF_WORDS = FILTER_OFF
+
+
+def match_two_word_cmd(text, word, on_words=None, off_words=None):
     """دستور دوکلمه‌ای انعطاف‌پذیر — ترتیب هر طرف، ZWNJ دار یا بدون"""
     if not text:
         return None
+    if on_words is None:  on_words = ON_WORDS
+    if off_words is None: off_words = OFF_WORDS
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
     parts = [_strip_zwnj(p) for p in t_norm.strip().split() if p.strip()]
     w_parts = [_strip_zwnj(p) for p in word.replace('\u200c', ' ')
@@ -114,47 +139,45 @@ def match_two_word_cmd(text, word):
             continue
         rest = parts[:start] + parts[start + n:]
         if len(rest) == 1:
-            if rest[0] in ON_WORDS:  return True
-            if rest[0] in OFF_WORDS: return False
+            if rest[0] in on_words:  return True
+            if rest[0] in off_words: return False
         elif len(rest) == 2:
             joined = rest[0] + rest[1]
-            if joined in ON_WORDS:  return True
-            if joined in OFF_WORDS: return False
+            if joined in on_words:  return True
+            if joined in off_words: return False
     return None
 
 
 def _check_betting_lock(text):
-    """چک می‌کنه دستور 'شرط بندی باز/بسته' رو — همه‌ی حالت‌ها"""
+    """پشتیبان برای شرط بندی — با منطق فیچر"""
     if not text:
         return None
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
     parts = [p for p in t_norm.strip().split() if p.strip()]
 
-    # فرم چسبیده: "شرط‌بندی باز"
     for i, p in enumerate(parts):
         if _strip_zwnj(p) == "شرطبندی":
             rest = parts[:i] + parts[i + 1:]
             if len(rest) == 1:
                 r = _strip_zwnj(rest[0])
-                if r in ON_WORDS:  return True
-                if r in OFF_WORDS: return False
+                if r in FEATURE_ON:  return True
+                if r in FEATURE_OFF: return False
             elif len(rest) == 2:
                 joined = _strip_zwnj(rest[0] + rest[1])
-                if joined in ON_WORDS:  return True
-                if joined in OFF_WORDS: return False
+                if joined in FEATURE_ON:  return True
+                if joined in FEATURE_OFF: return False
 
-    # فرم جدا: "شرط بندی باز" / "باز شرط بندی"
     for i in range(len(parts) - 1):
         if parts[i] == "شرط" and parts[i + 1] == "بندی":
             rest = parts[:i] + parts[i + 2:]
             if len(rest) == 1:
                 r = _strip_zwnj(rest[0])
-                if r in ON_WORDS:  return True
-                if r in OFF_WORDS: return False
+                if r in FEATURE_ON:  return True
+                if r in FEATURE_OFF: return False
             elif len(rest) == 2:
                 joined = _strip_zwnj(rest[0] + rest[1])
-                if joined in ON_WORDS:  return True
-                if joined in OFF_WORDS: return False
+                if joined in FEATURE_ON:  return True
+                if joined in FEATURE_OFF: return False
     return None
 
 
@@ -1287,7 +1310,6 @@ def build_font_message(text):
 
     styles = []
 
-    # استایل‌های یونیکد — فقط اگه حرف انگلیسی باشه
     if _has_latin(text):
         styles.append(font_bold(text))
         styles.append(font_italic(text))
@@ -1300,7 +1322,6 @@ def build_font_message(text):
         styles.append(font_fullwidth(text))
         styles.append(font_small_caps(text))
 
-    # استایل‌های تزئینی — همیشه
     styles.append(deco_strike(text))
     styles.append(deco_underline(text))
     styles.append(deco_overline(text))
@@ -1496,7 +1517,7 @@ def get_features_text():
         "🎰 **بازی شرط بندی**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 📌 `شرط بندی` → راهنما\n"
-        "├ 🟢 `شرط بندی باز` / `باز شرط بندی`\n"
+        "├ 🟢 `شرط بندی فعال` / `فعال شرط بندی`\n"
         "├ 🔴 `شرط بندی بسته` / `بسته شرط بندی`\n"
         "└ 💡 فقط در گروه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -1507,7 +1528,7 @@ def get_features_text():
         "├ 📌 `ممنون` / `خداحافظ` / `شب بخیر`\n"
         "├ 🎯 ۵۰+ کلیدواژه با ۵ پاسخ\n"
         "├ 🌟 پیش‌فرض: فعال\n"
-        "├ 🟢 `سخنگو باز` / `باز سخنگو`\n"
+        "├ 🟢 `سخنگو فعال` / `فعال سخنگو`\n"
         "├ 🔴 `سخنگو بسته` / `بسته سخنگو`\n"
         "└ 💡 فقط در گروه\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -1525,16 +1546,16 @@ def get_features_text():
         "━━━━━━━━━━━━━━━━━━━\n"
         "🛡️ **قفل‌ها (هر دو ترتیب کار می‌کنه!)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 🔗 لینک (باز/بسته)\n"
-        "├ 🆔 آیدی (باز/بسته)\n"
-        "├ 📢 اسپم (باز/بسته)\n"
-        "├ 🔗 هایپرلینک (باز/بسته)\n"
-        "├ 🤬 فحش (باز/بسته)\n"
-        "├ 📨 فوروارد (باز/بسته)\n"
-        "├ 🎞️ گیف (باز/بسته)\n"
-        "├ 👋 خوش‌آمدگویی (باز/بسته)\n"
-        "├ 💬 سخنگو (باز/بسته)\n"
-        "└ 🎰 شرط بندی (باز/بسته)\n\n"
+        "├ 🔗 لینک: `لینک قفل` / `قفل لینک`\n"
+        "├ 🆔 آیدی: `آیدی قفل` / `قفل آیدی`\n"
+        "├ 📢 اسپم: `اسپم قفل` / `قفل اسپم`\n"
+        "├ 🔗 هایپرلینک: `هایپرلینک قفل`\n"
+        "├ 🤬 فحش: `فحش قفل` / `قفل فحش`\n"
+        "├ 📨 فوروارد: `فوروارد قفل`\n"
+        "├ 🎞️ گیف: `گیف قفل` / `قفل گیف`\n"
+        "├ 👋 خوش‌آمدگویی: `خوش‌آمدگویی قفل`\n"
+        "├ 💬 سخنگو: `سخنگو قفل`\n"
+        "└ 🎰 شرط بندی: `شرط بندی قفل`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🔒 **قفل گروه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -1797,8 +1818,13 @@ def contains_hyperlink(text):
 
 
 def contains_id(text):
+    """تشخیص آیدی — @username و آیدی‌های روبیکا"""
     if not text: return False
-    return bool(re.search(r'@\w+', text))
+    # @username
+    if re.search(r'@\w+', text): return True
+    # Rubika user IDs: u/b + alphanumeric 10+ chars
+    if re.search(r'\b[ub][A-Za-z0-9]{10,}\b', text): return True
+    return False
 
 
 def is_command(text, *cmds):
@@ -2027,15 +2053,15 @@ def get_help_text():
         "├ 🎰 `شرط بندی` → راهنما\n"
         "└ 🚫 `انصراف` → لغو\n\n"
         "🔓 **قفل‌ها (هر دو ترتیب کار می‌کنه):**\n"
-        "├ `لینک باز` / `باز لینک`\n"
-        "├ `آیدی بسته` / `بسته آیدی`\n"
+        "├ `لینک قفل` / `قفل لینک`\n"
+        "├ `آیدی قفل` / `قفل آیدی`\n"
         "├ `اسپم فعال` / `فعال اسپم`\n"
         "├ `فحش خاموش` / `خاموش فحش`\n"
         "├ `فوروارد قفل` / `قفل فوروارد`\n"
         "├ `گیف روشن` / `روشن گیف`\n"
         "├ `سخنگو بسته` / `بسته سخنگو`\n"
         "├ `شرط بندی بسته` / `بسته شرط بندی`\n"
-        "└ `هایپرلینک باز` / `باز هایپرلینک`\n\n"
+        "└ `هایپرلینک قفل` / `قفل هایپرلینک`\n\n"
         "👑 **مالک / ویژه:**\n"
         "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
         "├ 🚫 `بن` / `سیک` / `اخراج` (ریپلای)\n"
@@ -2750,8 +2776,8 @@ async def handle_message(bot, message):
                 print(f"⚠️ talkative: {e}", flush=True)
             return
 
-        # 🔄 قفل دوکلمه‌ای - سخنگو
-        res = match_two_word_cmd(clean_text, "سخنگو")
+        # 🔄 قفل دوکلمه‌ای - سخنگو (فیچر)
+        res = match_two_word_cmd(clean_text, "سخنگو", FEATURE_ON, FEATURE_OFF)
         if res is not None:
             if not can_manage: return
             set_talkative(chat_id, res)
@@ -2767,8 +2793,10 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
-        # 🔄 قفل دوکلمه‌ای - شرط بندی
-        bet_res = _check_betting_lock(clean_text)
+        # 🔄 قفل دوکلمه‌ای - شرط بندی (فیچر)
+        bet_res = match_two_word_cmd(clean_text, "شرط بندی", FEATURE_ON, FEATURE_OFF)
+        if bet_res is None:
+            bet_res = _check_betting_lock(clean_text)
         if bet_res is not None:
             if not can_manage: return
             settings["betting_enabled"] = bet_res
@@ -2786,21 +2814,42 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
-        # 🔄 بقیه قفل‌های دوکلمه‌ای
-        lock_words_map = {
+        # 🔄 قفل‌های پیام (فیلتر) — با کلمات FILTER
+        filter_locks = {
             "لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
-            "خوش‌آمدگویی": "welcome", "خوشآمدگویی": "welcome",
             "فحش": "profanity", "فوروارد": "forward", "هدایت": "forward",
-            "گیف": "gif", "خداحافظی": "goodbye",
+            "گیف": "gif",
         }
-        for w, key in lock_words_map.items():
-            res = match_two_word_cmd(clean_text, w)
+        for w, key in filter_locks.items():
+            res = match_two_word_cmd(clean_text, w, FILTER_ON, FILTER_OFF)
             if res is not None:
                 if not can_manage: return
                 settings[key] = res
                 bot_data["settings"] = settings
                 save_data(bot_data, force=True)
-                status = "🟢 باز" if res else "🔴 بسته"
+                if res:
+                    txt = (f"🔒 **{w} قفل شد!**\n\n"
+                           f"✅ حالا پیام‌های حاوی {w} پاک می‌شن.\n\n"
+                           f"🔓 برای باز کردن: `{w} باز`\n\n⚡ **FLUXBOT**")
+                else:
+                    txt = (f"🔓 **{w} باز شد!**\n\n"
+                           f"❌ دیگه پیام‌های حاوی {w} پاک نمی‌شن.\n\n"
+                           f"🔒 برای قفل کردن: `{w} قفل`\n\n⚡ **FLUXBOT**")
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=txt)
+                return
+
+        # 🔄 قفل‌های فیچر (welcome, goodbye)
+        feature_locks = {
+            "خوش‌آمدگویی": "welcome", "خوشآمدگویی": "welcome", "خداحافظی": "goodbye",
+        }
+        for w, key in feature_locks.items():
+            res = match_two_word_cmd(clean_text, w, FEATURE_ON, FEATURE_OFF)
+            if res is not None:
+                if not can_manage: return
+                settings[key] = res
+                bot_data["settings"] = settings
+                save_data(bot_data, force=True)
+                status = "🟢 فعال" if res else "🔴 غیرفعال"
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
                                        text=f"✅ **{w}** {status} شد.\n\n⚡ **FLUXBOT**")
                 return
