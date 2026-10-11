@@ -223,14 +223,15 @@ def _save_pv_chat_id(bot_data, save_data, user_id, chat_id):
     _safe_save(save_data, bot_data)
 
 
+# ═══════════ ✅ _try_pv_send (فیکس شده) ═══════════
 async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, save_data=None):
-    """ارسال PV — با حداکثر تلاش"""
+    """ارسال PV — با حداکثر تلاش و پارس قوی‌تر"""
     uid = str(user_id or "").strip()
     if not uid: return False, "شناسه خالیه"
 
     print(f"🔍 [PV] user_id={uid!r} current={current_chat_id!r}", flush=True)
 
-    # ۱. اگه current chat_id b0 هست
+    # ۱. اگه current chat_id b0 هست (داخل PV)
     if current_chat_id and str(current_chat_id).startswith("b"):
         if bot_data is not None:
             _save_pv_chat_id(bot_data, save_data, uid, current_chat_id)
@@ -252,31 +253,42 @@ async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, 
             except Exception as e:
                 print(f"⚠️ [PV] cached failed: {e}", flush=True)
 
-    # ۳. get_chat_info (permissive)
+    # ۳. get_chat_info — با پارس قوی‌تر (توی data و chat هر دو رو چک می‌کنه)
     for method_name in ("get_chat_info", "get_chat"):
         if not hasattr(bot, method_name): continue
         try:
             print(f"🔍 [PV] trying {method_name}", flush=True)
             method = getattr(bot, method_name)
             info = await method(uid)
-            if info:
-                data = info.get("data", info) if isinstance(info, dict) else info
-                if isinstance(data, dict):
-                    chat = data.get("chat", data)
-                    if isinstance(chat, dict):
-                        for key in ("chat_id", "object_guid", "object_id", "guid"):
-                            real_id = chat.get(key)
-                            if not real_id: continue
-                            real_id_str = str(real_id)
-                            if real_id_str == uid: continue
-                            try:
-                                await bot.send_message(chat_id=real_id_str, text=text)
-                                print(f"✅ [PV] SUCCESS {method_name} {real_id_str}", flush=True)
-                                if bot_data is not None and real_id_str.startswith("b"):
-                                    _save_pv_chat_id(bot_data, save_data, uid, real_id_str)
-                                return True, f"موفق با {method_name}"
-                            except Exception as e:
-                                print(f"⚠️ [PV] {method_name} send {real_id_str} failed: {e}", flush=True)
+            if not info:
+                continue
+            data = info.get("data", info) if isinstance(info, dict) else info
+            if not isinstance(data, dict):
+                continue
+
+            # 🆕 چک کردن هم chat و هم data برای chat_id
+            containers = []
+            if isinstance(data.get("chat"), dict):
+                containers.append(data["chat"])
+            containers.append(data)  # خود data
+
+            seen_ids = set()
+            for container in containers:
+                for key in ("chat_id", "object_guid", "object_id", "guid", "id"):
+                    real_id = container.get(key)
+                    if not real_id: continue
+                    real_id_str = str(real_id)
+                    if real_id_str in seen_ids: continue
+                    seen_ids.add(real_id_str)
+                    if real_id_str == uid: continue
+                    try:
+                        await bot.send_message(chat_id=real_id_str, text=text)
+                        print(f"✅ [PV] SUCCESS {method_name} {real_id_str}", flush=True)
+                        if bot_data is not None and real_id_str.startswith("b"):
+                            _save_pv_chat_id(bot_data, save_data, uid, real_id_str)
+                        return True, f"موفق با {method_name}"
+                    except Exception as e:
+                        print(f"⚠️ [PV] {method_name} send {real_id_str} failed: {e}", flush=True)
         except Exception as e:
             print(f"⚠️ [PV] {method_name} failed: {e}", flush=True)
 
@@ -301,12 +313,8 @@ async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, 
     return False, "همه روش‌ها ناموفق"
 
 
-# ═══════════ ✅ تشخیص راهنما (فیکس شده) ═══════════
+# ═══════════ ✅ تشخیص راهنما (فقط دقیق) ═══════════
 def _is_help_cmd(raw, clean):
-    """
-    فقط دستورات دقیق راهنما رو تشخیص می‌ده
-    شرط بندی تاس فرد مقدار 50000 → راهنما نمیاد ✅
-    """
     exact = {
         "شرط بندی", "شرطبندی",
         "اموزش شرط بندی", "اموزششرطبندی",
@@ -644,7 +652,6 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
             reply_to=msg.message_id)
         return True
 
-    # Fallback
     fallback = (
         "⚠️ **پیوی ربات بسته‌ست!**\n\n"
         "📌 کد اینجا نشون داده می‌شه:\n"
