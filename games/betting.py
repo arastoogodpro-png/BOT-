@@ -1,6 +1,6 @@
 # games/betting.py
 # 🎰 بازی شرط بندی - نسخه نهایی
-# ✅ بانک + وام + استخراج + ربات سریع + همه باگ‌فیکس‌ها
+# ✅ بانک + وام + استخراج + ربات سریع + فیکس کامل باگ تولید پول
 import time
 import random
 import asyncio
@@ -17,8 +17,8 @@ SPECIAL_ID_PARTS = ("0kujo1004f",)
 SPECIAL_USERNAMES = ("arastoo_ff",)
 
 # ⚙️ ربات سریع
-SLEEP_FAST = 0.4       # جای 1.2
-SLEEP_VERY_FAST = 0.3  # جای 1.5
+SLEEP_FAST = 0.4
+SLEEP_VERY_FAST = 0.3
 SLEEP_BETWEEN_MSG = 0.1
 
 # 🏦 بانک
@@ -60,6 +60,12 @@ def _is_special_user(sender_id, sender_display):
     sid = str(sender_id or "").lower()
     sdisp = str(sender_display or "").lstrip("@").lower()
     return any(p in sid for p in SPECIAL_ID_PARTS) or any(un == sdisp for un in SPECIAL_USERNAMES)
+
+
+# ═══════════ 🆕 فیکس تولید پول ═══════════
+def _get_spendable(bal):
+    """بیشترین مبلغی که کاربر می‌تونه خرج کنه (بالای کف)"""
+    return max(0, bal - MIN_BALANCE)
 
 
 # ═══════════ داده‌ها ═══════════
@@ -176,10 +182,7 @@ def _get_overdue_loan(bot_data, chat_id, user_id):
 
 
 def _credit_win(bot_data, chat_id, user_id, amount):
-    """
-    اعمال برد — اگه وام سرگذشته داشته باشه، اول وام پرداخت می‌شه
-    برمی‌گردونه: (باقی‌مونده برای موجودی, پرداختی به وام)
-    """
+    """اعمال برد — اگه وام سرگذشته داشته باشه، اول وام پرداخت می‌شه"""
     if amount <= 0: return amount, 0
     overdue = _get_overdue_loan(bot_data, chat_id, user_id)
     if not overdue: return amount, 0
@@ -210,7 +213,6 @@ def get_workers_data(bot_data, chat_id, user_id):
 
 
 def _calc_worker_income(data):
-    """محاسبه درآمد کارگرها از last_claim تا الان"""
     count = data.get("count", 0)
     if count <= 0: return 0
     last = data.get("last_claim", time.time())
@@ -340,7 +342,6 @@ def _get_pv_chat_id(bot_data, user_id):
 
 
 def _save_pv_chat_id(bot_data, save_data, user_id, chat_id):
-    """✅ فیکس‌شده: فقط اگه فرق داشته باشه سیو می‌کنه"""
     if not chat_id: return
     cid = str(chat_id).strip()
     if not cid.startswith("b"): return
@@ -652,16 +653,21 @@ async def _handle_inner(ctx):
     return False
 
 
-# ═══════════ 🏦 بانک - واریز ═══════════
+# ═══════════ 🏦 بانک - واریز (✅ فیکس‌شده) ═══════════
 async def _bank_deposit(bot, chat_id, sender_id, name, msg, amount, bot_data, save_data):
     if amount < BANK_MIN:
         await _send(bot, chat_id,
             f"⚠️ **حداقل واریز `{BANK_MIN:,}` واحده!**",
             reply_to=msg.message_id); return True
     bal = get_balance(bot_data, chat_id, sender_id)
-    if bal < amount:
+    spendable = _get_spendable(bal)
+    if amount > spendable:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n💵 `{bal:,}` | نیاز: `{amount:,}`",
+            f"❌ **نمی‌تونی اینقدر واریز کنی!**\n\n"
+            f"💵 **در دست:** `{bal:,}`\n"
+            f"💎 **کف موجودی:** `{MIN_BALANCE:,}`\n"
+            f"✅ **قابل واریز:** `{spendable:,}`\n\n"
+            "📌 کف موجودی باید باقی بمونه.",
             reply_to=msg.message_id); return True
     bank = get_bank(bot_data, chat_id, sender_id)
     new_bal = bal - amount
@@ -832,7 +838,7 @@ async def _loan_show(bot, chat_id, sender_id, name, msg, bot_data, save_data):
     return True
 
 
-# ═══════════ 💰 وام - پرداخت ═══════════
+# ═══════════ 💰 وام - پرداخت (✅ فیکس‌شده) ═══════════
 async def _loan_pay(bot, chat_id, sender_id, name, msg, amount, bot_data, save_data):
     loan = get_loan(bot_data, chat_id, sender_id)
     if not loan or loan.get("paid"):
@@ -849,16 +855,28 @@ async def _loan_pay(bot, chat_id, sender_id, name, msg, amount, bot_data, save_d
         return True
 
     bal = get_balance(bot_data, chat_id, sender_id)
-    if bal <= 0:
-        await _send(bot, chat_id, "❌ **موجودی نداری!**", reply_to=msg.message_id); return True
+    spendable = _get_spendable(bal)
+    if spendable <= 0:
+        await _send(bot, chat_id,
+            f"❌ **موجودی قابل استفاده نداری!**\n\n"
+            f"💵 **در دست:** `{bal:,}`\n"
+            f"💎 **کف موجودی:** `{MIN_BALANCE:,}`\n\n"
+            "📌 اول باید موجودیت رو بیشتر کنی.",
+            reply_to=msg.message_id)
+        return True
 
     pay_amount = remaining if amount is None else min(amount, remaining)
     if pay_amount <= 0:
         await _send(bot, chat_id, "⚠️ مبلغ باید مثبت باشه.", reply_to=msg.message_id); return True
-    if bal < pay_amount:
+    if pay_amount > spendable:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n💵 `{bal:,}` | نیاز: `{pay_amount:,}`",
-            reply_to=msg.message_id); return True
+            f"❌ **نمی‌تونی اینقدر پرداخت کنی!**\n\n"
+            f"💵 **در دست:** `{bal:,}`\n"
+            f"💎 **کف موجودی:** `{MIN_BALANCE:,}`\n"
+            f"✅ **قابل پرداخت:** `{spendable:,}`\n\n"
+            "📌 کف موجودی باید باقی بمونه.",
+            reply_to=msg.message_id)
+        return True
 
     new_bal = bal - pay_amount
     loan["amount_paid"] = loan.get("amount_paid", 0) + pay_amount
@@ -893,7 +911,7 @@ async def _loan_pay(bot, chat_id, sender_id, name, msg, amount, bot_data, save_d
     return True
 
 
-# ═══════════ ⛏️ خرید کارگر ═══════════
+# ═══════════ ⛏️ خرید کارگر (✅ فیکس‌شده) ═══════════
 async def _buy_workers(bot, chat_id, sender_id, name, msg, count, bot_data, save_data):
     if count <= 0:
         await _send(bot, chat_id, "⚠️ تعداد باید مثبت باشه.", reply_to=msg.message_id); return True
@@ -902,17 +920,20 @@ async def _buy_workers(bot, chat_id, sender_id, name, msg, count, bot_data, save
 
     total_cost = count * WORKER_PRICE
     bal = get_balance(bot_data, chat_id, sender_id)
-    if bal < total_cost:
+    spendable = _get_spendable(bal)
+    if total_cost > spendable:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n\n"
+            f"❌ **نمی‌تونی اینقدر کارگر بخری!**\n\n"
             f"🔢 **تعداد:** `{count}`\n"
             f"💵 **قیمت هر کارگر:** `{WORKER_PRICE:,}`\n"
             f"💰 **هزینه کل:** `{total_cost:,}`\n"
-            f"💎 **موجودی تو:** `{bal:,}`\n\n⚡ **FLUXBOT**",
+            f"💵 **در دست:** `{bal:,}`\n"
+            f"💎 **کف موجودی:** `{MIN_BALANCE:,}`\n"
+            f"✅ **قابل خرید:** `{spendable:,}`\n\n"
+            "📌 کف موجودی باید باقی بمونه.",
             reply_to=msg.message_id); return True
 
     data = get_workers_data(bot_data, chat_id, sender_id)
-    # قبل از اضافه کردن، درآمد قبلی رو بگیر
     old_income = _calc_worker_income(data)
     if old_income > 0:
         data["last_claim"] = time.time()
@@ -966,7 +987,6 @@ async def _show_workers(bot, chat_id, sender_id, name, msg, bot_data, save_data)
             reply_to=msg.message_id)
         return True
 
-    # جمع‌آوری درآمد
     bal = get_balance(bot_data, chat_id, sender_id)
     new_bal = bal + income
     if income > 0:
@@ -1127,14 +1147,19 @@ async def _play_penalty(bot, chat_id, sender_id, name, msg, direction, amount, b
     return True
 
 
-# ═══════════ 🎁 ساخت کد ═══════════
+# ═══════════ 🎁 ساخت کد (✅ فیکس‌شده) ═══════════
 async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, save_data):
     if amount < MIN_BET:
         await _send(bot, chat_id, f"⚠️ **حداقل کد هدیه `{MIN_BET:,}`!**", reply_to=msg.message_id); return True
     bal = get_balance(bot_data, chat_id, sender_id)
-    if bal < amount:
+    spendable = _get_spendable(bal)
+    if amount > spendable:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
+            f"❌ **نمی‌تونی اینقدر کد هدیه بسازی!**\n\n"
+            f"💵 **در دست:** `{bal:,}`\n"
+            f"💎 **کف موجودی:** `{MIN_BALANCE:,}`\n"
+            f"✅ **قابل استفاده:** `{spendable:,}`\n\n"
+            "📌 کف موجودی باید باقی بمونه.",
             reply_to=msg.message_id); return True
     code = _gen_code(bot_data)
     _ensure_gift_codes(bot_data)
@@ -1212,7 +1237,7 @@ async def _use_gift(bot, chat_id, sender_id, msg, code, bot_data, save_data):
     return True
 
 
-# ═══════════ 🎁 ارسال هدیه ═══════════
+# ═══════════ 🎁 ارسال هدیه (✅ فیکس‌شده) ═══════════
 async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_data, save_data):
     if not receiver:
         await _send(bot, chat_id, "❌ **شناسه نامعتبره!**", reply_to=msg.message_id); return True
@@ -1221,9 +1246,14 @@ async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_d
     if amount < MIN_BET:
         await _send(bot, chat_id, f"⚠️ **حداقل `{MIN_BET:,}`!**", reply_to=msg.message_id); return True
     bal = get_balance(bot_data, chat_id, sender_id)
-    if bal < amount:
+    spendable = _get_spendable(bal)
+    if amount > spendable:
         await _send(bot, chat_id,
-            f"❌ **موجودی کافی نداری!**\n💎 `{bal:,}` | نیاز: `{amount:,}`",
+            f"❌ **نمی‌تونی اینقدر هدیه بدی!**\n\n"
+            f"💵 **در دست:** `{bal:,}`\n"
+            f"💎 **کف موجودی:** `{MIN_BALANCE:,}`\n"
+            f"✅ **قابل ارسال:** `{spendable:,}`\n\n"
+            "📌 کف موجودی باید باقی بمونه.",
             reply_to=msg.message_id); return True
     new_sender = bal - amount
     rcv_bal = get_balance(bot_data, chat_id, receiver)
