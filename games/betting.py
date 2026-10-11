@@ -1,6 +1,5 @@
 # games/betting.py
-# 🎰 بازی شرط بندی - نسخه نهایی کامل
-# ✅ فیکس PV با تبدیل u0 → b0
+# 🎰 بازی شرط بندی - نسخه نهایی با فیکس PV
 import time
 import random
 import asyncio
@@ -68,6 +67,12 @@ def _ensure_gift_codes(bot_data):
 def _ensure_cooldowns(bot_data):
     if "betting_cooldowns" not in bot_data or not isinstance(bot_data.get("betting_cooldowns"), dict):
         bot_data["betting_cooldowns"] = {}
+
+
+def _ensure_pv_chats(bot_data):
+    """ذخیره chat_id خصوصی کاربران (b0...)"""
+    if "pv_chats" not in bot_data or not isinstance(bot_data.get("pv_chats"), dict):
+        bot_data["pv_chats"] = {}
 
 
 def get_balance(bot_data, user_id):
@@ -216,63 +221,99 @@ async def _auto_delete(bot, chat_id, message_id, delay):
         print(f"⚠️ betting auto_delete: {e}", flush=True)
 
 
-def _to_pv_id(user_id):
+def _get_pv_chat_id(bot_data, user_id):
     """
-    تبدیل شناسه کاربر به شناسه چت خصوصی
-    u0XXXX → b0XXXX
+    گرفتن chat_id خصوصی (b0...) از حافظه
+    این مقدار وقتی ذخیره میشه که کاربر در PV به ربات پیام بده
     """
-    uid = str(user_id or "").strip()
-    if not uid:
-        return []
-    variants = []
-    if uid.startswith("u"):
-        variants.append("b" + uid[1:])   # u0 → b0
-        variants.append(uid)              # خود u0
-    elif uid.startswith("b"):
-        variants.append(uid)              # خود b0
-        variants.append("u" + uid[1:])   # b0 → u0
-    elif uid.startswith("g") or uid.startswith("c"):
-        variants.append(uid)              # گروه
-    else:
-        variants.append("u" + uid)        # اضافه کردن u
-        variants.append("b" + uid)        # اضافه کردن b
-    # حذف تکراری
-    seen = set()
-    result = []
-    for v in variants:
-        if v and v not in seen:
-            result.append(v)
-            seen.add(v)
-    return result
+    _ensure_pv_chats(bot_data)
+    return bot_data["pv_chats"].get(str(user_id))
 
 
-async def _try_pv_send(bot, user_id, text):
+def _save_pv_chat_id(bot_data, save_data, user_id, chat_id):
+    """ذخیره chat_id خصوصی کاربر"""
+    if not chat_id:
+        return
+    cid = str(chat_id).strip()
+    # فقط b0... رو ذخیره کن (chat_id خصوصی)
+    if not cid.startswith("b"):
+        return
+    _ensure_pv_chats(bot_data)
+    bot_data["pv_chats"][str(user_id)] = cid
+    _safe_save(save_data, bot_data)
+
+
+async def _try_pv_send(bot, user_id, text, current_chat_id=None, bot_data=None, save_data=None):
     """
-    ارسال PV با تبدیل u0 → b0 (فیکس اصلی!)
+    ارسال PV — اول از حافظه، بعد get_chat_info، بعد fallback
     """
     uid = str(user_id or "").strip()
     if not uid:
         return False, "شناسه خالیه"
 
-    print(f"🔍 [PV] user_id = {uid!r}", flush=True)
+    print(f"🔍 [PV] user_id = {uid!r}, current_chat_id = {current_chat_id!r}", flush=True)
 
-    variants = _to_pv_id(uid)
-    print(f"🔍 [PV] variants = {variants}", flush=True)
-
-    errors = []
-    for fmt in variants:
+    # ─── راه ۱: اگه current_chat_id خودش b0... هست، ذخیره و استفاده کن ───
+    if current_chat_id and str(current_chat_id).startswith("b") and bot_data is not None:
+        _save_pv_chat_id(bot_data, save_data, uid, current_chat_id)
         try:
-            print(f"🔍 [PV] trying chat_id = {fmt!r}", flush=True)
-            await bot.send_message(chat_id=fmt, text=text)
-            print(f"✅ [PV] SUCCESS with {fmt!r}", flush=True)
-            return True, f"موفق با {fmt}"
+            await bot.send_message(chat_id=str(current_chat_id), text=text)
+            print(f"✅ [PV] SUCCESS with current b0: {current_chat_id}", flush=True)
+            return True, "موفق با b0 فعلی"
         except Exception as e:
-            err = f"{type(e).__name__}: {str(e)[:150]}"
-            errors.append(f"{fmt} → {err}")
-            print(f"⚠️ [PV] FAILED {fmt!r}: {err}", flush=True)
-            await asyncio.sleep(0.3)
+            print(f"⚠️ [PV] current b0 failed: {e}", flush=True)
 
-    return False, " | ".join(errors) if errors else "خطای نامشخص"
+    # ─── راه ۲: از حافظه (pv_chats) استفاده کن ───
+    if bot_data is not None:
+        cached = _get_pv_chat_id(bot_data, uid)
+        if cached:
+            try:
+                print(f"🔍 [PV] trying cached b0: {cached}", flush=True)
+                await bot.send_message(chat_id=cached, text=text)
+                print(f"✅ [PV] SUCCESS with cached b0: {cached}", flush=True)
+                return True, "موفق با b0 ذخیره‌شده"
+            except Exception as e:
+                print(f"⚠️ [PV] cached b0 failed: {e}", flush=True)
+
+    # ─── راه ۳: get_chat_info ───
+    try:
+        print(f"🔍 [PV] trying get_chat_info for {uid}", flush=True)
+        info = await bot.get_chat_info(uid)
+        if info:
+            data = info.get("data", info) if isinstance(info, dict) else info
+            if isinstance(data, dict):
+                chat = data.get("chat", data)
+                if isinstance(chat, dict):
+                    real_id = (
+                        chat.get("chat_id") or
+                        chat.get("object_guid") or
+                        chat.get("object_id") or
+                        chat.get("guid")
+                    )
+                    if real_id and str(real_id).startswith("b"):
+                        real_id_str = str(real_id)
+                        print(f"✅ [PV] got real b0: {real_id_str}", flush=True)
+                        if bot_data is not None:
+                            _save_pv_chat_id(bot_data, save_data, uid, real_id_str)
+                        try:
+                            await bot.send_message(chat_id=real_id_str, text=text)
+                            return True, "موفق با b0 از get_chat_info"
+                        except Exception as e:
+                            print(f"⚠️ [PV] real b0 send failed: {e}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [PV] get_chat_info failed: {e}", flush=True)
+
+    # ─── راه ۴: تلاش مستقیم ───
+    for fmt in [uid, "b" + uid[1:] if uid.startswith("u") else uid]:
+        try:
+            print(f"🔍 [PV] trying direct: {fmt}", flush=True)
+            await bot.send_message(chat_id=fmt, text=text)
+            print(f"✅ [PV] SUCCESS direct: {fmt}", flush=True)
+            return True, f"موفق مستقیم با {fmt}"
+        except Exception as e:
+            print(f"⚠️ [PV] direct {fmt} failed: {e}", flush=True)
+
+    return False, "همه روش‌ها ناموفق"
 
 
 # ═══════════ تشخیص راهنما ═══════════
@@ -344,15 +385,25 @@ async def _handle_inner(ctx):
     text_low = text_norm.lower()
     t_nospace = text_low.replace(" ", "")
 
-    # ═══ 🔬 تست پیوی ═══
+    # ═══ 🔬 تست پیوی (در PV یا گروه) ═══
     if text_low == "تست پیوی" or raw_low == "تست پیوی":
-        ok, info = await _try_pv_send(bot, sender_id, "✅ تست موفق! پیوی کار می‌کنه.")
+        # اگه در PV زده شده، chat_id خودش b0... هست، ذخیره کن
+        _save_pv_chat_id(bot_data, save_data, sender_id, chat_id)
+        ok, info = await _try_pv_send(bot, sender_id, "✅ تست موفق! پیوی کار می‌کنه.",
+                                       current_chat_id=chat_id, bot_data=bot_data, save_data=save_data)
         status = "✅ پیوی باز شد" if ok else "❌ پیوی کار نمی‌کنه"
+        # اگه chat_id خودش b0... هست، یعنی در PV هستیم
+        where = "📩 PV" if str(chat_id).startswith("b") else "👥 گروه"
         await _send(bot, chat_id,
             f"🔬 **تست پیوی**\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 **شناسه تو:** `{sender_id}`\n"
+            f"📍 **محل:** {where}\n"
             f"{status}\n\n"
             f"📋 **جزئیات:**\n{info[:600]}\n\n"
+            f"💡 **اگه PV کار نکرد:**\n"
+            f"├ برو پیوی ربات\n"
+            f"├ `/start` رو بزن\n"
+            f"└ دوباره `تست پیوی` رو بزن\n\n"
             f"⚡ **FLUXBOT**",
             reply_to=msg.message_id)
         return True
@@ -624,7 +675,9 @@ async def _create_gift(bot, chat_id, sender_id, name, msg, amount, bot_data, sav
         "⚡ **FLUXBOT**"
     )
 
-    ok, info = await _try_pv_send(bot, sender_id, dm_text)
+    ok, info = await _try_pv_send(bot, sender_id, dm_text,
+                                   current_chat_id=chat_id,
+                                   bot_data=bot_data, save_data=save_data)
 
     if ok:
         await _send(bot, chat_id,
@@ -724,12 +777,13 @@ async def _send_gift(bot, chat_id, sender_id, name, msg, receiver, amount, bot_d
         f"💰 **مبلغ:** `{amount:,}`\n\n"
         f"💎 **موجودی جدید تو:** `{new_sender:,}`\n\n⚡ **FLUXBOT**",
         reply_to=msg.message_id)
-    # اطلاع به دریافت‌کننده (اگه PV باز بود)
+    # اطلاع به دریافت‌کننده
     await _try_pv_send(bot, receiver,
         "🎁 **هدیه جدید!** 🎁\n━━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 **از:** {name}\n"
         f"💰 **مبلغ:** `+{amount:,}`\n"
-        f"💎 **موجودی جدید:** `{new_receiver:,}`\n\n⚡ **FLUXBOT**")
+        f"💎 **موجودی جدید:** `{new_receiver:,}`\n\n⚡ **FLUXBOT**",
+        current_chat_id=None, bot_data=bot_data, save_data=save_data)
     return True
 
 
