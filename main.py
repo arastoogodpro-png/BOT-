@@ -80,50 +80,81 @@ RED = "🔴"
 YELLOW = "🟡"
 
 
+# ================== 🔧 ZWNJ Helper ==================
+def _strip_zwnj(s):
+    """حذف ZWNJ/ZWJ + lowercase + strip"""
+    return (s or "").replace('\u200c', '').replace('\u200d', '').lower().strip()
+
+
 # ================== 🔄 Two-Word Flexible Command Matcher ==================
-ON_WORDS = {"باز", "روشن", "فعال", "بازکردن", "بازکن", "on", "enable", "روشن‌کن", "بازش"}
-OFF_WORDS = {"بسته", "خاموش", "غیرفعال", "قفل", "بستن", "ببند", "off", "disable", "خاموش‌کن", "قفلش"}
+ON_WORDS = {_strip_zwnj(w) for w in {
+    "باز", "روشن", "فعال", "بازکردن", "بازکن",
+    "on", "enable", "روشن‌کن", "بازش",
+}}
+OFF_WORDS = {_strip_zwnj(w) for w in {
+    "بسته", "خاموش", "غیرفعال", "قفل", "بستن", "ببند",
+    "off", "disable", "خاموش‌کن", "قفلش",
+}}
 
 
 def match_two_word_cmd(text, word):
-    if not text: return None
+    """دستور دوکلمه‌ای انعطاف‌پذیر — ترتیب هر طرف، ZWNJ دار یا بدون"""
+    if not text:
+        return None
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
-    parts = [p for p in t_norm.strip().split() if p.strip()]
-    if len(parts) != 2: return None
-    a, b = parts[0].strip(), parts[1].strip()
-    w_norm = word.replace('\u200c', ' ').replace('\u200d', ' ')
-    if a == w_norm:
-        if b in ON_WORDS: return True
-        if b in OFF_WORDS: return False
-    if b == w_norm:
-        if a in ON_WORDS: return True
-        if a in OFF_WORDS: return False
+    parts = [_strip_zwnj(p) for p in t_norm.strip().split() if p.strip()]
+    w_parts = [_strip_zwnj(p) for p in word.replace('\u200c', ' ')
+                                              .replace('\u200d', ' ')
+                                              .split() if p.strip()]
+    if not w_parts or not parts:
+        return None
+    n = len(w_parts)
+    for start in range(len(parts) - n + 1):
+        if parts[start:start + n] != w_parts:
+            continue
+        rest = parts[:start] + parts[start + n:]
+        if len(rest) == 1:
+            if rest[0] in ON_WORDS:  return True
+            if rest[0] in OFF_WORDS: return False
+        elif len(rest) == 2:
+            joined = rest[0] + rest[1]
+            if joined in ON_WORDS:  return True
+            if joined in OFF_WORDS: return False
     return None
 
 
 def _check_betting_lock(text):
-    """چک می‌کنه دستور 'شرط بندی باز/بسته' رو (هم 2 کلمه‌ای هم 3 کلمه‌ای)"""
-    if not text: return None
+    """چک می‌کنه دستور 'شرط بندی باز/بسته' رو — همه‌ی حالت‌ها"""
+    if not text:
+        return None
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
     parts = [p for p in t_norm.strip().split() if p.strip()]
-    # فرم 3 کلمه‌ای: "شرط بندی باز" یا "باز شرط بندی"
-    if len(parts) == 3:
-        a, b, c = parts[0], parts[1], parts[2]
-        if a == "شرط" and b == "بندی":
-            if c in ON_WORDS: return True
-            if c in OFF_WORDS: return False
-        if b == "شرط" and c == "بندی":
-            if a in ON_WORDS: return True
-            if a in OFF_WORDS: return False
-    # فرم 2 کلمه‌ای: "شرط‌بندی باز" (وقتی بدون فاصله بزنه) یا "باز شرط‌بندی"
-    if len(parts) == 2:
-        a, b = parts[0], parts[1]
-        if a == "شرط‌بندی":
-            if b in ON_WORDS: return True
-            if b in OFF_WORDS: return False
-        if b == "شرط‌بندی":
-            if a in ON_WORDS: return True
-            if a in OFF_WORDS: return False
+
+    # فرم چسبیده: "شرط‌بندی باز"
+    for i, p in enumerate(parts):
+        if _strip_zwnj(p) == "شرطبندی":
+            rest = parts[:i] + parts[i + 1:]
+            if len(rest) == 1:
+                r = _strip_zwnj(rest[0])
+                if r in ON_WORDS:  return True
+                if r in OFF_WORDS: return False
+            elif len(rest) == 2:
+                joined = _strip_zwnj(rest[0] + rest[1])
+                if joined in ON_WORDS:  return True
+                if joined in OFF_WORDS: return False
+
+    # فرم جدا: "شرط بندی باز" / "باز شرط بندی"
+    for i in range(len(parts) - 1):
+        if parts[i] == "شرط" and parts[i + 1] == "بندی":
+            rest = parts[:i] + parts[i + 2:]
+            if len(rest) == 1:
+                r = _strip_zwnj(rest[0])
+                if r in ON_WORDS:  return True
+                if r in OFF_WORDS: return False
+            elif len(rest) == 2:
+                joined = _strip_zwnj(rest[0] + rest[1])
+                if joined in ON_WORDS:  return True
+                if joined in OFF_WORDS: return False
     return None
 
 
@@ -472,7 +503,8 @@ def is_board_full(board):
 
 
 def get_games():
-    if "games" not in bot_data: bot_data["games"] = {}
+    if "games" not in bot_data or not isinstance(bot_data["games"], dict):
+        bot_data["games"] = {}
     return bot_data["games"]
 
 
@@ -933,7 +965,6 @@ PROFANITY_LIST = [
     "تخم سگ","مغز کیر","کص مغز","نناموس","بی حیا","لختی","برهنه","کیرمغز",
 ]
 
-# 🆕 Lazy init — چون normalize_text پایین‌تر تعریف شده، اینجا None می‌گذاریم
 _PROFANITY_NORMALIZED = None
 
 JOKES = [
@@ -1247,61 +1278,49 @@ def deco_dot_above(t): return ''.join(ch + '\u0307' for ch in t)
 
 
 def build_font_message(text):
-    text = text.strip()
-    if not text: return None
-    if len(text) > 30: text = text[:30] + "…"
-    has_en = _has_latin(text)
-    sections = []
-    if has_en:
-        sections.append(("🇬🇧 **استایل‌های انگلیسی:**", [
-            ("1️⃣ بولد", font_bold(text)),
-            ("2️⃣ ایتالیک", font_italic(text)),
-            ("3️⃣ بولد ایتالیک", font_bold_italic(text)),
-            ("4️⃣ اسکریپت", font_bold_script(text)),
-            ("5️⃣ گوتیک", font_bold_fraktur(text)),
-            ("6️⃣ ساده", font_sans(text)),
-            ("7️⃣ ساده بولد", font_sans_bold(text)),
-            ("8️⃣ مونو", font_mono(text)),
-            ("9️⃣ پهن", font_fullwidth(text)),
-            ("🔟 کوچک", font_small_caps(text)),
-        ]))
-    sections.append(("✨ **استایل‌های تزئینی:**", [
-        ("✏️ خط‌خورده", deco_strike(text)),
-        ("✏️ زیرخط", deco_underline(text)),
-        ("✏️ بالای خط", deco_overline(text)),
-        ("✏️ دو زیرخط", deco_double_under(text)),
-        ("✏️ خط‌دار", deco_slash(text)),
-        ("✏️ نقطه‌دار", deco_dot_above(text)),
-        ("✿ گل‌دار", f"✿ {text} ✿"),
-        ("❁ برگ‌دار", f"❁ {text} ❁"),
-        ("【 قاب مربع 】", f"【 {text} 】"),
-        ("「 قاب گوشه 」", f"「 {text} 」"),
-        ("★彡 ستاره‌ای 彡★", f"★彡 {text} 彡★"),
-        ("༺ تیبت ༻", f"༺ {text} ༻"),
-        ("•° کلاسیک °•", f"•°¯`•• {text} ••´¯°•"),
-        ("▁▂▃ خط پایین ▃▂▁", f"▁▂▃ {text} ▃▂▁"),
-    ]))
-    lines = [
-        "╭─━━━━━━━━━━━━━━━━━━━─╮",
-        "   🎨 **فونت‌ساز FLUXBOT** 🎨",
-        "╰─━━━━━━━━━━━━━━━━━━━─╯",
-        "",
-        f"📝 **متن شما:** `{text}`",
-        "━━━━━━━━━━━━━━━━━━━",
-        "",
-    ]
-    for title, items in sections:
-        lines.append(title)
-        lines.append("")
-        for name, styled in items:
-            lines.append(f"**{name}:**")
-            lines.append(styled)
-            lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
-    lines.append("💡 **روی هر خط، نگه دار و کپی کن!**")
-    lines.append("")
-    lines.append("⚡ **FLUXBOT**")
+    """فونت‌ساز کوتاه و کپی‌پذیر — یک پیام"""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if len(text) > 12:
+        text = text[:12] + "…"
+
+    styles = []
+
+    # استایل‌های یونیکد — فقط اگه حرف انگلیسی باشه
+    if _has_latin(text):
+        styles.append(font_bold(text))
+        styles.append(font_italic(text))
+        styles.append(font_bold_italic(text))
+        styles.append(font_bold_script(text))
+        styles.append(font_bold_fraktur(text))
+        styles.append(font_sans(text))
+        styles.append(font_sans_bold(text))
+        styles.append(font_mono(text))
+        styles.append(font_fullwidth(text))
+        styles.append(font_small_caps(text))
+
+    # استایل‌های تزئینی — همیشه
+    styles.append(deco_strike(text))
+    styles.append(deco_underline(text))
+    styles.append(deco_overline(text))
+    styles.append(deco_double_under(text))
+    styles.append(deco_slash(text))
+    styles.append(deco_dot_above(text))
+    styles.append(f"✿ {text} ✿")
+    styles.append(f"❁ {text} ❁")
+    styles.append(f"【 {text} 】")
+    styles.append(f"「 {text} 」")
+    styles.append(f"★彡 {text} 彡★")
+    styles.append(f"༺ {text} ༻")
+    styles.append(f"•°¯`•• {text} ••´¯°•")
+    styles.append(f"▁▂▃ {text} ▃▂▁")
+    styles.append(f"彡★ {text} ★彡")
+    styles.append(f"☆ {text} ☆")
+
+    lines = [f"🎨 فونت‌ساز | {text}", ""]
+    for i, s in enumerate(styles, 1):
+        lines.append(f"{i}- {s}")
     return "\n".join(lines)
 
 
@@ -1719,7 +1738,6 @@ async def cleanup_task():
                             del spam_tracker[cid][uid]
                 if not spam_tracker.get(cid):
                     spam_tracker.pop(cid, None)
-            # پاکسازی بازی‌های ماژولار
             for _game in MODULAR_GAMES:
                 if hasattr(_game, "cleanup"):
                     try:
@@ -1803,7 +1821,6 @@ def contains_profanity(text):
     if not text: return None
     n = normalize_text(text)
     if not n: return None
-    # 🆕 Lazy init امن — چون normalize_text الان تعریف شده
     global _PROFANITY_NORMALIZED
     if _PROFANITY_NORMALIZED is None:
         _PROFANITY_NORMALIZED = [normalize_text(w) for w in PROFANITY_LIST if normalize_text(w)]
@@ -2703,7 +2720,13 @@ async def handle_message(bot, message):
                 try:
                     font_msg = build_font_message(font_text)
                     if font_msg:
-                        await send_long_message(chat_id, font_msg, reply_to_message_id=message.message_id)
+                        try:
+                            await bot.send_message(chat_id=chat_id, text=font_msg,
+                                                   reply_to_message_id=message.message_id)
+                        except Exception as e:
+                            print(f"❌ font send: {e}", flush=True)
+                            await send_long_message(chat_id, font_msg,
+                                                    reply_to_message_id=message.message_id)
                 except Exception as e:
                     print(f"❌ font: {e}", flush=True)
             return
@@ -2711,28 +2734,20 @@ async def handle_message(bot, message):
         if is_command(clean_text, "فونت", "فوت"):
             try:
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
-                    text=("🎨 **فونت‌ساز FLUXBOT**\n\n"
-                        "📝 **روش استفاده:**\n"
-                        "├ `فونت [متن]`\n"
-                        "└ `فوت [متن]`\n\n"
-                        "💡 **مثال:**\n"
-                        "├ `فونت سلام`\n"
-                        "├ `فوت Hello`\n"
-                        "└ `فونت Python 2024`\n\n"
-                        "🌟 بالای ۲۰ استایل (فارسی + انگلیسی)\n\n"
-                        "⚡ **FLUXBOT**"))
+                    text=("🎨 **فونت‌ساز**\n\n"
+                          "📝 مثال: `فونت king`\n\n"
+                          "⚡ **FLUXBOT**"))
             except: pass
             return
 
         # 💬 سخنگو
         talk_reply = get_talkative_reply(raw_text)
-        if talk_reply:
-            if is_talkative_enabled(chat_id):
-                try:
-                    reply = random.choice(talk_reply)
-                    await bot.send_message(chat_id=chat_id, text=reply, reply_to_message_id=message.message_id)
-                except Exception as e:
-                    print(f"⚠️ talkative: {e}", flush=True)
+        if talk_reply and is_talkative_enabled(chat_id):
+            try:
+                reply = random.choice(talk_reply)
+                await bot.send_message(chat_id=chat_id, text=reply, reply_to_message_id=message.message_id)
+            except Exception as e:
+                print(f"⚠️ talkative: {e}", flush=True)
             return
 
         # 🔄 قفل دوکلمه‌ای - سخنگو
@@ -3550,37 +3565,49 @@ async def handle_message(bot, message):
 
         if is_command(clean_text, "لیست قفل"):
             if not can_manage: return
-            st = lambda v: "🔴" if v else "🟢"
+
+            def _stat(v):
+                return "🟢 فعال" if v else "🔴 غیرفعال"
+
             wl = bot_data["warn_limit"].get(chat_id, 3)
-            ws = "🔴" if settings["warning"] else "🟢"
             fc = len(ensure_list_dict(bot_data, "filtered_words", chat_id))
             gl, gr = is_group_locked(chat_id)
-            gs = f"🔴 ({gr})" if gl else "🟢"
+            gs = f"🟢 فعال ({gr})" if gl else "🔴 غیرفعال"
             wda = get_warn_delete_after(chat_id)
             if wda > 0:
                 m, s = wda // 60, wda % 60
-                wds = f"🟡 {m}د {s}ث" if m > 0 else f"🟡 {wda}ث"
-            else: wds = "🟢"
+                wds = f"🟢 فعال ({m}د {s}ث)" if m > 0 else f"🟢 فعال ({wda}ث)"
+            else:
+                wds = "🔴 غیرفعال"
             ar = bot_data.get("anti_repeat", {}).get(chat_id)
-            ars = f"🔴 {ar} پیام یکسان" if ar else "🟢 غیرفعال"
+            ars = f"🟢 فعال ({ar} پیام یکسان)" if ar else "🔴 غیرفعال"
             slow = bot_data.get("slow_mode", {}).get(chat_id)
-            slows = f"🔴 {format_duration(slow)}" if slow else "🟢 غیرفعال"
+            slows = f"🟢 فعال ({format_duration(slow)})" if slow else "🔴 غیرفعال"
             rl = bot_data.get("rules", {}).get(chat_id)
-            rs = "🔴 تنظیم شده" if rl else "🟢 تنظیم نشده"
+            rs = "🟢 تنظیم شده" if rl else "🔴 تنظیم نشده"
             tk = "🟢 فعال" if is_talkative_enabled(chat_id) else "🔴 غیرفعال"
+            bets = _stat(settings.get("betting_enabled", True))
+
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "📋 **قفل‌ها**\n━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🔗 لینک: {st(settings['link'])}\n🆔 آیدی: {st(settings['id'])}\n"
-                f"📢 اسپم: {st(settings['spam'])}\n🔗 هایپرلینک: {st(settings['hyperlink'])}\n"
-                f"👋 خوش‌آمد: {st(settings.get('welcome', True))}\n🤬 فحش: {st(settings.get('profanity', True))}\n"
-                f"📨 فوروارد: {st(settings.get('forward', False))}\n🎞️ گیف: {st(settings.get('gif', False))}\n"
-                f"🔒 قفل گروه: {gs}\n⚠️ اخطار: {ws} ({wl})\n⏱️ حذف اخطار: {wds}\n"
+                f"🔗 لینک: {_stat(settings['link'])}\n"
+                f"🆔 آیدی: {_stat(settings['id'])}\n"
+                f"📢 اسپم: {_stat(settings['spam'])}\n"
+                f"🔗 هایپرلینک: {_stat(settings['hyperlink'])}\n"
+                f"👋 خوش‌آمد: {_stat(settings.get('welcome', True))}\n"
+                f"🤬 فحش: {_stat(settings.get('profanity', True))}\n"
+                f"📨 فوروارد: {_stat(settings.get('forward', False))}\n"
+                f"🎞️ گیف: {_stat(settings.get('gif', False))}\n"
+                f"🔒 قفل گروه: {gs}\n"
+                f"⚠️ اخطار: {_stat(settings['warning'])} ({wl})\n"
+                f"⏱️ حذف اخطار: {wds}\n"
                 f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n"
                 f"🔁 ضد تکرار: {ars}\n"
                 f"🐌 حالت آهسته: {slows}\n"
                 f"📜 قوانین: {rs}\n"
                 f"💬 سخنگو: {tk}\n"
-                f"🎰 شرط بندی: {st(settings.get('betting_enabled', True))}\n\n⚡ **FLUXBOT**"))
+                f"🎰 شرط بندی: {bets}\n\n"
+                "⚡ **FLUXBOT**"))
             return
 
         am = re.match(r"^تنظیم\s+اصل\s+(.+)$", clean_text)
