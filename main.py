@@ -80,13 +80,16 @@ RED = "🔴"
 YELLOW = "🟡"
 
 
-# ================== 🔧 ZWNJ Helper ==================
+# ================== 🔧 ZWNJ + Punctuation Helper ==================
 def _strip_zwnj(s):
-    """حذف ZWNJ/ZWJ + lowercase + strip"""
-    return (s or "").replace('\u200c', '').replace('\u200d', '').lower().strip()
+    """حذف ZWNJ/ZWJ + علائم نگارشی + lowercase + strip"""
+    if not s: return ""
+    s = s.replace('\u200c', '').replace('\u200d', '').lower().strip()
+    s = s.strip('!.?؟،,؛;:«»"\'()[]{}<>-—–…*_~')
+    return s
 
 
-# ================== 🔄 Two-Word Flexible Command Matcher ==================
+# ================== 🔄 Two-Word Command Matcher ==================
 # 🔒 قفل پیام‌ها (لینک، آیدی، فحش، اسپم، فوروارد، گیف، هایپرلینک)
 #   "X قفل" / "X بسته" / "X فعال" / "X روشن" → فعال (پیام پاک می‌شه)
 #   "X باز" / "X خاموش" / "X غیرفعال"       → غیرفعال (پیام پاک نمی‌شه)
@@ -101,9 +104,7 @@ FILTER_OFF = {_strip_zwnj(w) for w in {
     "off", "disable",
 }}
 
-# 🎰 فیچرها (سخنگو، شرط بندی، خوش‌آمدگویی، خداحافظی)
-#   "X فعال" / "X روشن" / "X باز"              → روشن
-#   "X غیرفعال" / "X خاموش" / "X بسته" / "X قفل" → خاموش
+# 🎰 فیچرها (سخنگو، شرط بندی، welcome، goodbye)
 FEATURE_ON = {_strip_zwnj(w) for w in {
     "فعال", "روشن", "باز", "بازکردن", "بازکن", "بازش",
     "فعال‌کن", "روشن‌کن",
@@ -115,22 +116,23 @@ FEATURE_OFF = {_strip_zwnj(w) for w in {
     "off", "disable",
 }}
 
-# پیش‌فرض = قفل پیام
 ON_WORDS = FILTER_ON
 OFF_WORDS = FILTER_OFF
 
 
 def match_two_word_cmd(text, word, on_words=None, off_words=None):
-    """دستور دوکلمه‌ای انعطاف‌پذیر — ترتیب هر طرف، ZWNJ دار یا بدون"""
+    """دستور دوکلمه‌ای انعطاف‌پذیر — ترتیب هر طرف، ZWNJ، علائم نگارشی"""
     if not text:
         return None
     if on_words is None:  on_words = ON_WORDS
     if off_words is None: off_words = OFF_WORDS
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
     parts = [_strip_zwnj(p) for p in t_norm.strip().split() if p.strip()]
+    parts = [p for p in parts if p]
     w_parts = [_strip_zwnj(p) for p in word.replace('\u200c', ' ')
                                               .replace('\u200d', ' ')
                                               .split() if p.strip()]
+    w_parts = [p for p in w_parts if p]
     if not w_parts or not parts:
         return None
     n = len(w_parts)
@@ -138,6 +140,7 @@ def match_two_word_cmd(text, word, on_words=None, off_words=None):
         if parts[start:start + n] != w_parts:
             continue
         rest = parts[:start] + parts[start + n:]
+        rest = [r for r in rest if r]
         if len(rest) == 1:
             if rest[0] in on_words:  return True
             if rest[0] in off_words: return False
@@ -149,39 +152,38 @@ def match_two_word_cmd(text, word, on_words=None, off_words=None):
 
 
 def _check_betting_lock(text):
-    """پشتیبان برای شرط بندی — با منطق فیچر"""
+    """پشتیبان شرط بندی"""
     if not text:
         return None
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
-    parts = [p for p in t_norm.strip().split() if p.strip()]
+    parts = [_strip_zwnj(p) for p in t_norm.strip().split() if p.strip()]
+    parts = [p for p in parts if p]
 
     for i, p in enumerate(parts):
-        if _strip_zwnj(p) == "شرطبندی":
-            rest = parts[:i] + parts[i + 1:]
+        if p == "شرطبندی":
+            rest = [r for r in (parts[:i] + parts[i+1:]) if r]
             if len(rest) == 1:
-                r = _strip_zwnj(rest[0])
-                if r in FEATURE_ON:  return True
-                if r in FEATURE_OFF: return False
+                if rest[0] in FEATURE_ON:  return True
+                if rest[0] in FEATURE_OFF: return False
             elif len(rest) == 2:
-                joined = _strip_zwnj(rest[0] + rest[1])
-                if joined in FEATURE_ON:  return True
-                if joined in FEATURE_OFF: return False
+                j = rest[0] + rest[1]
+                if j in FEATURE_ON:  return True
+                if j in FEATURE_OFF: return False
 
     for i in range(len(parts) - 1):
-        if parts[i] == "شرط" and parts[i + 1] == "بندی":
-            rest = parts[:i] + parts[i + 2:]
+        if parts[i] == "شرط" and parts[i+1] == "بندی":
+            rest = [r for r in (parts[:i] + parts[i+2:]) if r]
             if len(rest) == 1:
-                r = _strip_zwnj(rest[0])
-                if r in FEATURE_ON:  return True
-                if r in FEATURE_OFF: return False
+                if rest[0] in FEATURE_ON:  return True
+                if rest[0] in FEATURE_OFF: return False
             elif len(rest) == 2:
-                joined = _strip_zwnj(rest[0] + rest[1])
-                if joined in FEATURE_ON:  return True
-                if joined in FEATURE_OFF: return False
+                j = rest[0] + rest[1]
+                if j in FEATURE_ON:  return True
+                if j in FEATURE_OFF: return False
     return None
 
 
-# ================== 💬 TALKATIVE (سخنگو) ==================
+# ================== 💬 TALKATIVE ==================
 TALKATIVE_MAP = {
     ("ربات فلکس بات", "ربات فلاکس بات", "ربات فلوکس بات",
      "فلکس بات", "فلاکس بات", "فلوکس بات", "فلکسی بات",
@@ -1174,7 +1176,6 @@ LUCK = [
     "🍀 **شانس امروز:** ۳ از ۱۰! حواست باشه.",
 ]
 
-
 CHALLENGE_TEXTS = [
     "🎯 **چالش امروز:**\n\nبه ۳ نفر از اعضای این گروه یه تعریف **واقعی** بگو! 💬",
     "🔥 **چالش:**\n\nآخرین باری که به کسی کمک کردی کِی بود؟ همینجا تعریف کن! 🤝",
@@ -1301,7 +1302,6 @@ def deco_dot_above(t): return ''.join(ch + '\u0307' for ch in t)
 
 
 def build_font_message(text):
-    """فونت‌ساز کوتاه و کپی‌پذیر — یک پیام"""
     text = (text or "").strip()
     if not text:
         return None
@@ -1349,7 +1349,8 @@ def build_font_message(text):
 def clean_message(text):
     if not text: return ""
     text = re.sub(r"@\S+", "", text)
-    text = re.sub(r"/(\w+)", r"\1", text)
+    # فقط اسلش‌هایی که اول کلمه هستن (نه توی URL)
+    text = re.sub(r"(?<![/\w])/(\w+)", r"\1", text)
     return text.strip()
 
 
@@ -1514,36 +1515,6 @@ def get_features_text():
         "   📖 قابلیت‌های کامل\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎰 **بازی شرط بندی**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📌 `شرط بندی` → راهنما\n"
-        "├ 🟢 `شرط بندی فعال` / `فعال شرط بندی`\n"
-        "├ 🔴 `شرط بندی بسته` / `بسته شرط بندی`\n"
-        "└ 💡 فقط در گروه\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "💬 **سخنگو**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📌 `فلکس بات` / `فلاکس بات` / `ربات`\n"
-        "├ 📌 `سلام` / `خوبی` / `چه خبر`\n"
-        "├ 📌 `ممنون` / `خداحافظ` / `شب بخیر`\n"
-        "├ 🎯 ۵۰+ کلیدواژه با ۵ پاسخ\n"
-        "├ 🌟 پیش‌فرض: فعال\n"
-        "├ 🟢 `سخنگو فعال` / `فعال سخنگو`\n"
-        "├ 🔴 `سخنگو بسته` / `بسته سخنگو`\n"
-        "└ 💡 فقط در گروه\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "🎨 **فونت‌ساز**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📝 `فونت [متن]` یا `فوت [متن]`\n"
-        "├ 🌍 فارسی و انگلیسی\n"
-        "└ 💡 فقط در گروه\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "🎯 **چالش روزانه**\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "├ 📌 `چالش`\n"
-        "├ 🎲 چالش تصادفی (متنی/نظرسنجی)\n"
-        "└ 💡 فقط در گروه\n\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
         "🛡️ **قفل‌ها (هر دو ترتیب کار می‌کنه!)**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 🔗 لینک: `لینک قفل` / `قفل لینک`\n"
@@ -1553,9 +1524,27 @@ def get_features_text():
         "├ 🤬 فحش: `فحش قفل` / `قفل فحش`\n"
         "├ 📨 فوروارد: `فوروارد قفل`\n"
         "├ 🎞️ گیف: `گیف قفل` / `قفل گیف`\n"
-        "├ 👋 خوش‌آمدگویی: `خوش‌آمدگویی قفل`\n"
-        "├ 💬 سخنگو: `سخنگو قفل`\n"
-        "└ 🎰 شرط بندی: `شرط بندی قفل`\n\n"
+        "└ 🔓 باز کردن: `[اسم] باز` / `باز [اسم]`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "💬 **سخنگو**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📌 `فلکس بات` / `ربات` / `سلام`\n"
+        "├ 🟢 `سخنگو فعال` / `سخنگو باز`\n"
+        "└ 🔴 `سخنگو بسته` / `سخنگو قفل`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎰 **شرط بندی**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 🟢 `شرط بندی فعال` / `شرط بندی باز`\n"
+        "└ 🔴 `شرط بندی بسته` / `شرط بندی قفل`\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎨 **فونت‌ساز**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📝 `فونت [متن]` یا `فوت [متن]`\n"
+        "└ 🌍 فارسی و انگلیسی\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎯 **چالش روزانه**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "└ 📌 `چالش`\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🔒 **قفل گروه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -1818,12 +1807,14 @@ def contains_hyperlink(text):
 
 
 def contains_id(text):
-    """تشخیص آیدی — @username و آیدی‌های روبیکا"""
+    """تشخیص آیدی — @username، @[id]، u/b ID خالص"""
     if not text: return False
     # @username
-    if re.search(r'@\w+', text): return True
-    # Rubika user IDs: u/b + alphanumeric 10+ chars
-    if re.search(r'\b[ub][A-Za-z0-9]{10,}\b', text): return True
+    if re.search(r'@[\w\.\-]+', text): return True
+    # @[user_id] (mention entity روبیکا)
+    if re.search(r'@\[[^\]]+\]', text): return True
+    # Rubika user/bot IDs: u/b + 15+ alphanumeric chars
+    if re.search(r'(?<![A-Za-z0-9])[ub][A-Za-z0-9]{15,}(?![A-Za-z0-9])', text): return True
     return False
 
 
@@ -1844,14 +1835,25 @@ def contains_filtered_word(text, lst):
 
 
 def contains_profanity(text):
+    """تشخیص فحش — کلمات کوتاه فقط تطبیق کامل توکن"""
     if not text: return None
     n = normalize_text(text)
     if not n: return None
     global _PROFANITY_NORMALIZED
     if _PROFANITY_NORMALIZED is None:
-        _PROFANITY_NORMALIZED = [normalize_text(w) for w in PROFANITY_LIST if normalize_text(w)]
-    for nw in _PROFANITY_NORMALIZED:
-        if nw and nw in n: return nw
+        _PROFANITY_NORMALIZED = [(normalize_text(w), w) for w in PROFANITY_LIST if normalize_text(w)]
+
+    raw_words = set(normalize_text(w) for w in re.split(r'\s+', text) if w)
+
+    for nw, orig in _PROFANITY_NORMALIZED:
+        if not nw:
+            continue
+        if len(nw) <= 3:
+            if nw in raw_words:
+                return orig
+        else:
+            if nw in n:
+                return orig
     return None
 
 
@@ -1982,12 +1984,8 @@ def build_keypad():
         b8 = b.button_simple(id="btn_points", text=BTN_POINTS)
         b9 = b.button_simple(id="btn_features", text=BTN_FEATURES)
         b10 = b.button_simple(id="btn_top_inviters", text=BTN_TOP_INVITERS)
-        b.row(b1, b2)
-        b.row(b3, b4)
-        b.row(b5)
-        b.row(b6, b7)
-        b.row(b8, b9)
-        b.row(b10)
+        b.row(b1, b2); b.row(b3, b4); b.row(b5)
+        b.row(b6, b7); b.row(b8, b9); b.row(b10)
         return b.build()
     except Exception as e:
         print(f"❌ KEYPAD: {e}", flush=True)
@@ -2049,16 +2047,15 @@ def get_help_text():
         "├ 🎲 `دوز` / `دوز قرمز` / `دوز زرد`\n"
         "├ 👥 `شرکت` → پیوستن\n"
         "├ 🎯 `1` تا `7` → انداختن مهره\n"
-        "├ 🪙 `بازی شیر یا خط` → بازی شانسی\n"
-        "├ 🎰 `شرط بندی` → راهنما\n"
+        "├ 🪙 `بازی شیر یا خط`\n"
         "└ 🚫 `انصراف` → لغو\n\n"
-        "🔓 **قفل‌ها (هر دو ترتیب کار می‌کنه):**\n"
+        "🔓 **قفل‌ها (هر دو ترتیب):**\n"
         "├ `لینک قفل` / `قفل لینک`\n"
         "├ `آیدی قفل` / `قفل آیدی`\n"
-        "├ `اسپم فعال` / `فعال اسپم`\n"
-        "├ `فحش خاموش` / `خاموش فحش`\n"
+        "├ `اسپم قفل` / `قفل اسپم`\n"
+        "├ `فحش قفل` / `قفل فحش`\n"
         "├ `فوروارد قفل` / `قفل فوروارد`\n"
-        "├ `گیف روشن` / `روشن گیف`\n"
+        "├ `گیف قفل` / `قفل گیف`\n"
         "├ `سخنگو بسته` / `بسته سخنگو`\n"
         "├ `شرط بندی بسته` / `بسته شرط بندی`\n"
         "└ `هایپرلینک قفل` / `قفل هایپرلینک`\n\n"
@@ -2077,7 +2074,7 @@ def get_help_text():
         "├ 📝 `تنظیم قوانین [متن]`\n"
         "├ 🔁 `تنظیم ضد تکرار [۲-۱۰]`\n"
         "├ 🐌 `تنظیم حالت آهسته [زمان]`\n"
-        "├ 🧹 `پاکسازی [عدد]` → پاکسازی انبوه\n"
+        "├ 🧹 `پاکسازی [عدد]`\n"
         "├ 📢 `ارسال پیام همگانی گروه [متن]` (فقط مالک)\n"
         "└ 📋 `لیست گروه ها` (توی پیوی)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT** | جریان قدرت"
@@ -2301,25 +2298,21 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
         if locked:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                print(f"🗑️ edit: پاک شد (قفل گروه)", flush=True)
             except: pass
             return
         chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
         if sender_id in chat_mutes and time.time() < chat_mutes[sender_id]:
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                print(f"🗑️ edit: پاک شد (سکوت)", flush=True)
             except: pass
             return
-        if settings.get("profanity", True):
-            if contains_profanity(new_text):
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
-                        await add_warning(chat_id, sender_id, "فحش (ویرایش)", user_info=ui)
-                    print(f"🗑️ edit: پاک شد (فحش)", flush=True)
-                except: pass
-                return
+        if settings.get("profanity", True) and contains_profanity(new_text):
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                if settings.get("warning"):
+                    await add_warning(chat_id, sender_id, "فحش (ویرایش)", user_info=ui)
+            except: pass
+            return
         if settings.get("filter"):
             fl = ensure_list_dict(bot_data, "filtered_words", chat_id)
             if contains_filtered_word(new_text, fl):
@@ -2327,7 +2320,6 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings.get("warning"):
                         await add_warning(chat_id, sender_id, "کلمه فیلترشده (ویرایش)", user_info=ui)
-                    print(f"🗑️ edit: پاک شد (فیلتر)", flush=True)
                 except: pass
                 return
         if settings.get("link") and contains_link(new_text):
@@ -2335,7 +2327,6 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "لینک (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (لینک)", flush=True)
             except: pass
             return
         if settings.get("hyperlink") and contains_hyperlink(new_text):
@@ -2343,7 +2334,6 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "هایپرلینک (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (هایپرلینک)", flush=True)
             except: pass
             return
         if settings.get("id") and contains_id(new_text):
@@ -2351,7 +2341,6 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, sender_id, "آیدی (ویرایش)", user_info=ui)
-                print(f"🗑️ edit: پاک شد (آیدی)", flush=True)
             except: pass
             return
         if settings.get("forward", False) and is_forwarded(message):
@@ -2368,7 +2357,6 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                     await add_warning(chat_id, sender_id, "گیف (ویرایش)", user_info=ui)
             except: pass
             return
-        print(f"✏️ ویرایش چک شد (بدون تخلف)", flush=True)
     except Exception as e:
         print(f"❌ process_edited_message: {e}", flush=True)
 
@@ -2388,7 +2376,20 @@ async def handle_message(bot, message):
 
         chat_id = str(message.chat_id) if message.chat_id else ""
         sender_id = str(message.sender_id) if message.sender_id else ""
-        raw_text = (message.text or "").strip()
+
+        # ✅ کپشن هم چک می‌شه، نه فقط text
+        raw_text = ""
+        try:
+            t = getattr(message, "text", None)
+            if t:
+                raw_text = t.strip()
+            else:
+                cap = (getattr(message, "caption", None) or
+                       getattr(message, "text_caption", None) or "")
+                if cap:
+                    raw_text = str(cap).strip()
+        except:
+            raw_text = ""
         clean_text = clean_message(raw_text)
 
         is_valid_mid = _is_valid_id(msg_id)
@@ -2444,7 +2445,7 @@ async def handle_message(bot, message):
             broadcast_text = broadcast_match.group(1).strip()
             if not broadcast_text:
                 try:
-                    await bot.send_message(chat_id=chat_id, text="⚠️ متن پیام رو وارد کن.\n\nمثال:\n`ارسال پیام همگانی گروه سلام به همه`")
+                    await bot.send_message(chat_id=chat_id, text="⚠️ متن پیام رو وارد کن.")
                 except: pass
                 return
             groups = ensure_list(bot_data.get("known_groups", []))
@@ -2497,16 +2498,6 @@ async def handle_message(bot, message):
             if dead_groups:
                 report += f"🗑️ حذف‌شده (مرده): **{len(dead_groups)}**\n"
             report += f"\n⚡ **FLUXBOT**"
-            if failed_details:
-                details_text = "\n\n🔍 **جزئیات خطاها:**\n"
-                for gid, err_str, is_dead, val_err in failed_details[:20]:
-                    short_gid = gid[-8:] if len(gid) > 8 else gid
-                    err_display = (val_err or err_str)[:120].replace("\n", " ")
-                    tag = "🗑️ حذف شد" if is_dead else "⚠️ باقی ماند"
-                    details_text += f"\n├ `...{short_gid}` → {tag}\n│    {err_display}\n"
-                if len(failed_details) > 20:
-                    details_text += f"\n... و {len(failed_details) - 20} خطای دیگر"
-                report += details_text
             try:
                 await send_long_message(chat_id, report)
             except: pass
@@ -2650,58 +2641,74 @@ async def handle_message(bot, message):
             if await handle_spam_check(chat_id, sender_id, msg_id, ui):
                 return
 
+        # ═══════ فیلترهای محتوا — اینجا ID اول از همه ═══════
         if bot_is_active and not can_manage:
-            if settings.get("profanity", True):
-                if contains_profanity(raw_text):
-                    try:
-                        await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                        if settings["warning"]: await add_warning(chat_id, sender_id, "فحش", user_info=ui)
-                    except Exception as e:
-                        print(f"⚠️ delete profanity: {e}", flush=True)
-                    return
-            if settings["filter"]:
+            # 🆔 آیدی — اول چک می‌شه
+            if settings.get("id", False) and contains_id(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال آیدی", user_info=ui)
+                    print(f"🗑️ [ID] پاک شد | {chat_id} | {raw_text[:40]}", flush=True)
+                except Exception as e:
+                    print(f"⚠️ delete ID failed: {e}", flush=True)
+                return
+            # 🔗 لینک
+            if settings.get("link", False) and contains_link(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "لینک", user_info=ui)
+                    print(f"🗑️ [LINK] پاک شد | {chat_id}", flush=True)
+                except Exception as e:
+                    print(f"⚠️ delete link failed: {e}", flush=True)
+                return
+            # 🔗 هایپرلینک
+            if settings.get("hyperlink", False) and contains_hyperlink(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "هایپرلینک", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete hyperlink failed: {e}", flush=True)
+                return
+            # 🤬 فحش
+            if settings.get("profanity", True) and contains_profanity(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "فحش", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete profanity failed: {e}", flush=True)
+                return
+            # 🚫 کلمه فیلترشده
+            if settings.get("filter", True):
                 fl = ensure_list_dict(bot_data, "filtered_words", chat_id)
                 if contains_filtered_word(raw_text, fl):
                     try:
                         await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                        if settings["warning"]: await add_warning(chat_id, sender_id, "کلمه فیلترشده", user_info=ui)
+                        if settings.get("warning"):
+                            await add_warning(chat_id, sender_id, "کلمه فیلترشده", user_info=ui)
                     except Exception as e:
-                        print(f"⚠️ delete filter: {e}", flush=True)
+                        print(f"⚠️ delete filter failed: {e}", flush=True)
                     return
-            if settings["link"] and contains_link(raw_text):
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings["warning"]: await add_warning(chat_id, sender_id, "لینک", user_info=ui)
-                except Exception as e:
-                    print(f"⚠️ delete link: {e}", flush=True)
-                return
-            if settings["hyperlink"] and contains_hyperlink(raw_text):
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings["warning"]: await add_warning(chat_id, sender_id, "هایپرلینک", user_info=ui)
-                except Exception as e:
-                    print(f"⚠️ delete hyperlink: {e}", flush=True)
-                return
-            if settings["id"] and contains_id(raw_text):
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings["warning"]: await add_warning(chat_id, sender_id, "آیدی", user_info=ui)
-                except Exception as e:
-                    print(f"⚠️ delete id: {e}", flush=True)
-                return
+            # 📨 فوروارد
             if settings.get("forward", False) and is_forwarded(message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings["warning"]: await add_warning(chat_id, sender_id, "فوروارد", user_info=ui)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "فوروارد", user_info=ui)
                 except Exception as e:
-                    print(f"⚠️ delete forward: {e}", flush=True)
+                    print(f"⚠️ delete forward failed: {e}", flush=True)
                 return
+            # 🎞️ گیف
             if settings.get("gif", False) and is_gif(message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings["warning"]: await add_warning(chat_id, sender_id, "گیف", user_info=ui)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "گیف", user_info=ui)
                 except Exception as e:
-                    print(f"⚠️ delete gif: {e}", flush=True)
+                    print(f"⚠️ delete gif failed: {e}", flush=True)
                 return
 
         if not bot_is_active and not can_manage:
@@ -2766,8 +2773,16 @@ async def handle_message(bot, message):
             except: pass
             return
 
-        # 💬 سخنگو
-        talk_reply = get_talkative_reply(raw_text)
+        # 💬 سخنگو — دستورها رو قورت نمی‌ده
+        _looks_like_cmd = False
+        for _w in ("لینک", "آیدی", "اسپم", "هایپرلینک", "فحش",
+                   "فوروارد", "هدایت", "گیف", "سخنگو",
+                   "خوش‌آمدگویی", "خوشآمدگویی", "خداحافظی", "شرط بندی"):
+            if match_two_word_cmd(clean_text, _w, FILTER_ON, FILTER_OFF) is not None or \
+               match_two_word_cmd(clean_text, _w, FEATURE_ON, FEATURE_OFF) is not None:
+                _looks_like_cmd = True
+                break
+        talk_reply = None if _looks_like_cmd else get_talkative_reply(raw_text)
         if talk_reply and is_talkative_enabled(chat_id):
             try:
                 reply = random.choice(talk_reply)
@@ -2776,7 +2791,7 @@ async def handle_message(bot, message):
                 print(f"⚠️ talkative: {e}", flush=True)
             return
 
-        # 🔄 قفل دوکلمه‌ای - سخنگو (فیچر)
+        # 🔄 قفل سخنگو (فیچر)
         res = match_two_word_cmd(clean_text, "سخنگو", FEATURE_ON, FEATURE_OFF)
         if res is not None:
             if not can_manage: return
@@ -2793,7 +2808,7 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
-        # 🔄 قفل دوکلمه‌ای - شرط بندی (فیچر)
+        # 🔄 قفل شرط بندی (فیچر)
         bet_res = match_two_word_cmd(clean_text, "شرط بندی", FEATURE_ON, FEATURE_OFF)
         if bet_res is None:
             bet_res = _check_betting_lock(clean_text)
@@ -2814,11 +2829,10 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
-        # 🔄 قفل‌های پیام (فیلتر) — با کلمات FILTER
+        # 🔄 قفل‌های فیلتر
         filter_locks = {
             "لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
-            "فحش": "profanity", "فوروارد": "forward", "هدایت": "forward",
-            "گیف": "gif",
+            "فحش": "profanity", "فوروارد": "forward", "هدایت": "forward", "گیف": "gif",
         }
         for w, key in filter_locks.items():
             res = match_two_word_cmd(clean_text, w, FILTER_ON, FILTER_OFF)
@@ -2838,7 +2852,7 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=txt)
                 return
 
-        # 🔄 قفل‌های فیچر (welcome, goodbye)
+        # 🔄 قفل‌های فیچر
         feature_locks = {
             "خوش‌آمدگویی": "welcome", "خوشآمدگویی": "welcome", "خداحافظی": "goodbye",
         }
@@ -2858,20 +2872,13 @@ async def handle_message(bot, message):
         for _game in MODULAR_GAMES:
             try:
                 _ctx = {
-                    "bot": bot,
-                    "chat_id": chat_id,
-                    "sender_id": sender_id,
-                    "msg_id": msg_id,
-                    "raw_text": raw_text,
-                    "clean_text": clean_text,
-                    "sender_display": disp,
-                    "can_manage": can_manage,
+                    "bot": bot, "chat_id": chat_id, "sender_id": sender_id,
+                    "msg_id": msg_id, "raw_text": raw_text, "clean_text": clean_text,
+                    "sender_display": disp, "can_manage": can_manage,
                     "message": message,
                     "points_getter": get_points,
                     "points_setter": lambda uid, val: bot_data.get("points", {}).__setitem__(str(uid), val) or save_data(bot_data, force=True),
-                    "settings": settings,
-                    "bot_data": bot_data,
-                    "save_data": save_data,
+                    "settings": settings, "bot_data": bot_data, "save_data": save_data,
                 }
                 if await _game.handle(_ctx):
                     return
@@ -2922,9 +2929,7 @@ async def handle_message(bot, message):
         if rtm:
             if not is_owner_group: return
             rules_text = rtm.group(1).strip()
-            if not rules_text:
-                await bot.send_message(chat_id=chat_id, text="⚠️ متن قوانین رو وارد کنید.", reply_to_message_id=message.message_id)
-                return
+            if not rules_text: return
             if "rules" not in bot_data: bot_data["rules"] = {}
             bot_data["rules"][chat_id] = rules_text
             save_data(bot_data, force=True)
@@ -2947,9 +2952,7 @@ async def handle_message(bot, message):
         if cwm:
             if not is_owner_group: return
             welcome_text = cwm.group(1).strip()
-            if not welcome_text:
-                await bot.send_message(chat_id=chat_id, text="⚠️ متن را وارد کنید.", reply_to_message_id=message.message_id)
-                return
+            if not welcome_text: return
             if "custom_welcome" not in bot_data: bot_data["custom_welcome"] = {}
             bot_data["custom_welcome"][chat_id] = welcome_text
             save_data(bot_data, force=True)
@@ -2981,9 +2984,7 @@ async def handle_message(bot, message):
         if arm:
             if not is_owner_group: return
             limit = int(arm.group(1))
-            if limit < 2 or limit > 10:
-                await bot.send_message(chat_id=chat_id, text="⚠️ عدد باید بین ۲ تا ۱۰ باشد.", reply_to_message_id=message.message_id)
-                return
+            if limit < 2 or limit > 10: return
             if "anti_repeat" not in bot_data: bot_data["anti_repeat"] = {}
             bot_data["anti_repeat"][chat_id] = limit
             save_data(bot_data, force=True)
@@ -3004,8 +3005,7 @@ async def handle_message(bot, message):
         smm = re.match(r"^تنظیم\s+حالت\s+آهسته\s+(.+)$", clean_text)
         if smm:
             if not is_owner_group: return
-            dur_text = smm.group(1).strip()
-            sec = parse_slow_duration(dur_text)
+            sec = parse_slow_duration(smm.group(1).strip())
             if sec is None:
                 await bot.send_message(chat_id=chat_id, text=(
                     "⚠️ **فرمت اشتباه!**\n\nمثال‌ها:\n"
@@ -3035,9 +3035,7 @@ async def handle_message(bot, message):
         if bcm:
             if not can_manage: return
             limit = int(bcm.group(1))
-            if limit < 1 or limit > 500:
-                await bot.send_message(chat_id=chat_id, text="⚠️ عدد باید بین ۱ تا ۵۰۰ باشد.", reply_to_message_id=message.message_id)
-                return
+            if limit < 1 or limit > 500: return
             msg = await bot.send_message(chat_id=chat_id, text=f"🧹 در حال پاکسازی {limit} پیام...")
             deleted, failed = await bulk_cleanup(chat_id, sender_id, limit)
             try:
@@ -3055,7 +3053,6 @@ async def handle_message(bot, message):
                 g = games[chat_id]
                 started = g.get("started_at", 0)
                 if time.time() - started > (GAME_TIMEOUT * 3):
-                    print(f"🗑️ [stale-game] پاک شد: {chat_id}", flush=True)
                     del games[chat_id]
                     save_data(bot_data, force=True)
                 else:
@@ -3083,14 +3080,13 @@ async def handle_message(bot, message):
                 cf = coin_flip_games[chat_id]
                 started = cf.get("started_at", 0)
                 if time.time() - started > (GAME_TIMEOUT * 3):
-                    print(f"🗑️ [stale-coinflip] پاک شد: {chat_id}", flush=True)
                     del coin_flip_games[chat_id]
                 else:
                     await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
                                            text="⚠️ **یک بازی شیر یا خط در جریانه!**")
                     return
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یه بازی دیگه در جریانه!** اول اون تموم شه.")
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یه بازی دیگه در جریانه!**")
                 return
             coin_flip_games[chat_id] = {"player": str(sender_id), "started_at": time.time()}
             try: asyncio.create_task(game_timeout_check(chat_id, "coinflip"))
@@ -3220,22 +3216,19 @@ async def handle_message(bot, message):
                     f"{role_emoji} **مقام:** {role_fresh}\n"
                     f"📌 **توضیح:** {role_desc}\n\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"⚡ **FLUXBOT**"
-                ))
+                    f"⚡ **FLUXBOT**"))
             except Exception as e:
                 print(f"❌ role cmd: {e}", flush=True)
                 try:
                     await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
-                                           text="⚠️ خطا در دریافت مقام. لطفاً دوباره تلاش کن.")
+                                           text="⚠️ خطا در دریافت مقام.")
                 except: pass
             return
 
         if is_command(clean_text, "حذف ویژه", "لغو ویژه", "حذف ادمین"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
-            if tgt == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را از ویژه حذف کنید.", reply_to_message_id=message.message_id)
-                return
+            if tgt == "BOT_SELF": return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -3252,9 +3245,7 @@ async def handle_message(bot, message):
         if is_command(clean_text, "ویژه", "ادمین"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
-            if tgt == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="ℹ️ ربات خودش ویژه است.", reply_to_message_id=message.message_id)
-                return
+            if tgt == "BOT_SELF": return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -3273,9 +3264,7 @@ async def handle_message(bot, message):
         if wam:
             if not can_manage: return
             target_uid = await find_reply_target(message, chat_id)
-            if target_uid == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="⚠️ ربات اخطار ندارد.", reply_to_message_id=message.message_id)
-                return
+            if target_uid == "BOT_SELF": return
             if not target_uid:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -3306,8 +3295,7 @@ async def handle_message(bot, message):
         if dtm:
             if not can_manage: return
             mins = int(dtm.group(1))
-            if mins <= 0 or mins > 10080:
-                await bot.send_message(chat_id=chat_id, text="⚠️ عدد 1 تا 10080", reply_to_message_id=message.message_id); return
+            if mins <= 0 or mins > 10080: return
             rid = extract_reply_info(message)["reply_id"]
             if not rid:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام ریپلای کنید.", reply_to_message_id=message.message_id); return
@@ -3345,7 +3333,8 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
 
-        if is_command(clean_text, "قفل گروه", "قفلگروه"):
+        # قفل گروه (با هر فرمت)
+        if _strip_zwnj(clean_text) in ("قفلگروه", "قفلگرو"):
             if not can_manage: return
             if "group_locks" not in bot_data: bot_data["group_locks"] = {}
             bot_data["group_locks"][chat_id] = True
@@ -3357,8 +3346,7 @@ async def handle_message(bot, message):
         if tm:
             if not can_manage: return
             h = int(tm.group(1))
-            if h <= 0 or h > 168:
-                await bot.send_message(chat_id=chat_id, text="⚠️ 1 تا 168 ساعت", reply_to_message_id=message.message_id); return
+            if h <= 0 or h > 168: return
             et = time.time() + h * 3600
             if "temp_locks" not in bot_data: bot_data["temp_locks"] = {}
             if "group_locks" not in bot_data: bot_data["group_locks"] = {}
@@ -3373,8 +3361,7 @@ async def handle_message(bot, message):
         if sm:
             if not can_manage: return
             sh, sm2, eh, em = map(int, sm.groups())
-            if not (0 <= sh <= 23 and 0 <= sm2 <= 59 and 0 <= eh <= 23 and 0 <= em <= 59):
-                await bot.send_message(chat_id=chat_id, text="⚠️ ساعت نامعتبر", reply_to_message_id=message.message_id); return
+            if not (0 <= sh <= 23 and 0 <= sm2 <= 59 and 0 <= eh <= 23 and 0 <= em <= 59): return
             if "scheduled_locks" not in bot_data: bot_data["scheduled_locks"] = {}
             if chat_id not in bot_data["scheduled_locks"]: bot_data["scheduled_locks"][chat_id] = []
             bot_data["scheduled_locks"][chat_id].append((sh, sm2, eh, em))
@@ -3390,7 +3377,7 @@ async def handle_message(bot, message):
             await bot.send_message(chat_id=chat_id, text="✅ حذف شد.", reply_to_message_id=message.message_id)
             return
 
-        if is_command(clean_text, "لیست قفل گروه"):
+        if _strip_zwnj(clean_text) in ("لیستقفلگروه", "لیستقفلگرو"):
             if not can_manage: return
             s = []
             gl = bot_data.get("group_locks", {}).get(chat_id, False)
@@ -3440,8 +3427,7 @@ async def handle_message(bot, message):
         if wdm:
             if not is_owner_group: return
             sec = int(wdm.group(1))
-            if sec < 0 or sec > 3600:
-                await bot.send_message(chat_id=chat_id, text="⚠️ 0 تا 3600", reply_to_message_id=message.message_id); return
+            if sec < 0 or sec > 3600: return
             if "warn_delete_after" not in bot_data: bot_data["warn_delete_after"] = {}
             if sec == 0:
                 bot_data["warn_delete_after"][chat_id] = 0
@@ -3458,15 +3444,11 @@ async def handle_message(bot, message):
         if is_command(clean_text, "بن", "سیک", "اخراج"):
             if not can_manage: return
             tgt = await find_reply_target(message, chat_id)
-            if tgt == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را اخراج کنید!", reply_to_message_id=message.message_id)
-                return
+            if tgt == "BOT_SELF": return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
-            if tgt == OWNER_ID:
-                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید مالک ربات را اخراج کنید!", reply_to_message_id=message.message_id)
-                return
+            if tgt == OWNER_ID: return
             try:
                 ti = await get_user_info(chat_id, tgt)
                 td = format_user_display(ti, tgt)
@@ -3482,9 +3464,7 @@ async def handle_message(bot, message):
         if is_command(clean_text, "انبن", "آنبن"):
             if not can_manage: return
             tgt = await find_reply_target(message, chat_id)
-            if tgt == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="⚠️ ربات بن نبوده.", reply_to_message_id=message.message_id)
-                return
+            if tgt == "BOT_SELF": return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
@@ -3572,13 +3552,9 @@ async def handle_message(bot, message):
             mins = int(mm.group(1))
             if mins <= 0: return
             tgt = await find_reply_target(message, chat_id)
-            if tgt == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید ربات را سکوت کنید.", reply_to_message_id=message.message_id)
-                return
+            if tgt == "BOT_SELF": return
             if not tgt: tgt = sender_id
-            if tgt == OWNER_ID:
-                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید مالک ربات را سکوت کنید.", reply_to_message_id=message.message_id)
-                return
+            if tgt == OWNER_ID: return
             et = time.time() + mins * 60
             if "mute_list" not in bot_data: bot_data["mute_list"] = {}
             if chat_id not in bot_data["mute_list"]: bot_data["mute_list"][chat_id] = {}
@@ -3602,9 +3578,7 @@ async def handle_message(bot, message):
         if is_command(clean_text, "اخطار"):
             if not is_owner_group: return
             tgt = await find_reply_target(message, chat_id)
-            if tgt == "BOT_SELF":
-                await bot.send_message(chat_id=chat_id, text="⚠️ نمی‌توانید به ربات اخطار دهید.", reply_to_message_id=message.message_id)
-                return
+            if tgt == "BOT_SELF": return
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
