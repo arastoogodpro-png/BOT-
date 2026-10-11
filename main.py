@@ -9,6 +9,22 @@ from datetime import datetime, timedelta, timezone
 from rubka import Robot, Message
 from rubka.keypad import ChatKeypadBuilder
 
+# ═══════ لود خودکار بازی‌های ماژولار ═══════
+import importlib, os as _os
+MODULAR_GAMES = []
+_games_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "games")
+if _os.path.isdir(_games_dir):
+    for _f in sorted(_os.listdir(_games_dir)):
+        if _f.endswith(".py") and not _f.startswith("__"):
+            _name = _f[:-3]
+            try:
+                _mod = importlib.import_module(f"games.{_name}")
+                if hasattr(_mod, "handle"):
+                    MODULAR_GAMES.append(_mod)
+                    print(f"✅ بازی {_name} لود شد", flush=True)
+            except Exception as e:
+                print(f"⚠️ بازی {_name}: {e}", flush=True)
+
 TOKEN = os.getenv("RUBIKA_TOKEN", "").strip()
 if not TOKEN:
     raise RuntimeError("❌ RUBIKA_TOKEN تنظیم نشده است.")
@@ -43,12 +59,13 @@ MAX_FILTER_WORDS = 50
 
 CHANNEL_USERNAME = "@RPCITY_PHANTOM"
 GAME_TIMEOUT = 120
+SPAM_WINDOW = 5
+SPAM_LIMIT = 5
 
 username_cache = {}
 username_cache_ttl = {}
 spam_tracker = {}
 processed_messages = {}
-text_dedup = {}
 waiting_for_code = {}
 group_info_cache = {}
 group_info_cache_ttl = {}
@@ -70,12 +87,10 @@ OFF_WORDS = {"بسته", "خاموش", "غیرفعال", "قفل", "بستن", "
 
 def match_two_word_cmd(text, word):
     if not text: return None
-    # 🆕 نرمال‌سازی نیم‌فاصله به فاصله
     t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
     parts = [p for p in t_norm.strip().split() if p.strip()]
     if len(parts) != 2: return None
     a, b = parts[0].strip(), parts[1].strip()
-    # 🆕 نرمال کلمه ورودی هم
     w_norm = word.replace('\u200c', ' ').replace('\u200d', ' ')
     if a == w_norm:
         if b in ON_WORDS: return True
@@ -83,6 +98,32 @@ def match_two_word_cmd(text, word):
     if b == w_norm:
         if a in ON_WORDS: return True
         if a in OFF_WORDS: return False
+    return None
+
+
+def _check_betting_lock(text):
+    """چک می‌کنه دستور 'شرط بندی باز/بسته' رو (هم 2 کلمه‌ای هم 3 کلمه‌ای)"""
+    if not text: return None
+    t_norm = text.replace('\u200c', ' ').replace('\u200d', ' ')
+    parts = [p for p in t_norm.strip().split() if p.strip()]
+    # فرم 3 کلمه‌ای: "شرط بندی باز" یا "باز شرط بندی"
+    if len(parts) == 3:
+        a, b, c = parts[0], parts[1], parts[2]
+        if a == "شرط" and b == "بندی":
+            if c in ON_WORDS: return True
+            if c in OFF_WORDS: return False
+        if b == "شرط" and c == "بندی":
+            if a in ON_WORDS: return True
+            if a in OFF_WORDS: return False
+    # فرم 2 کلمه‌ای: "شرط‌بندی باز" (وقتی بدون فاصله بزنه) یا "باز شرط‌بندی"
+    if len(parts) == 2:
+        a, b = parts[0], parts[1]
+        if a == "شرط‌بندی":
+            if b in ON_WORDS: return True
+            if b in OFF_WORDS: return False
+        if b == "شرط‌بندی":
+            if a in ON_WORDS: return True
+            if a in OFF_WORDS: return False
     return None
 
 
@@ -467,7 +508,6 @@ async def start_game(chat_id, sender_id, sender_display, color_choice):
     if chat_id in games:
         g = games[chat_id]
         if g.get("status") in ("waiting", "playing"):
-            # 🆕 چک بازی قدیمی (گیر کرده بعد از ری‌استارت)
             started = g.get("started_at", 0)
             if time.time() - started > (GAME_TIMEOUT * 3):
                 print(f"🗑️ [stale-game] پاک شد: {chat_id}", flush=True)
@@ -525,7 +565,6 @@ def ensure_list(value):
 
 
 def ensure_list_dict(d, key, sub_key=None):
-    # 🆕 فیکس: استفاده از isinstance برای جلوگیری از تبدیل ناخواسته
     if sub_key is not None:
         if key not in d or not isinstance(d[key], dict):
             d[key] = {}
@@ -617,7 +656,7 @@ async def get_user_info(chat_id, user_id, force=False):
                     role = "ادمین"
             info["role"] = role
             username_cache[key] = info
-            username_cache_ttl[key] = now + 3600
+            username_cache_ttl[key] = now + 7200
             save_known_user(user_id, info.get("name"), info.get("username"))
     except Exception as e:
         print(f"⚠️ get_user_info: {e}", flush=True)
@@ -628,9 +667,16 @@ def save_known_user(user_id, name=None, username=None):
     if "known_users" not in bot_data: bot_data["known_users"] = {}
     uid = str(user_id)
     if uid not in bot_data["known_users"]: bot_data["known_users"][uid] = {}
-    if name: bot_data["known_users"][uid]["name"] = name
-    if username: bot_data["known_users"][uid]["username"] = username
+    changed = False
+    if name and bot_data["known_users"][uid].get("name") != name:
+        bot_data["known_users"][uid]["name"] = name
+        changed = True
+    if username and bot_data["known_users"][uid].get("username") != username:
+        bot_data["known_users"][uid]["username"] = username
+        changed = True
     bot_data["known_users"][uid]["last_seen"] = time.time()
+    if changed:
+        save_data(bot_data)
 
 
 def get_display_for_user(user_id):
@@ -723,13 +769,25 @@ def extract_reply_info(message):
     return result
 
 
+INVALID_IDS = ("", "None", "none", "NULL", "null", "0", "False", "false")
+
+
+def _is_valid_id(v):
+    if not v: return False
+    s = str(v).strip()
+    if not s: return False
+    if s in INVALID_IDS: return False
+    if s.startswith("<"): return False
+    return True
+
+
 async def find_reply_target(message, chat_id):
     info = extract_reply_info(message)
     rid = info["reply_id"]
     sid_direct = info["sender_id"]
-    if sid_direct:
+    if sid_direct and _is_valid_id(sid_direct):
         bot_id = await get_bot_id()
-        if bot_id and sid_direct == bot_id: return "BOT_SELF"
+        if bot_id and str(sid_direct) == str(bot_id): return "BOT_SELF"
         if rid and chat_id:
             c = load_cache()
             if chat_id not in c: c[chat_id] = {}
@@ -741,8 +799,9 @@ async def find_reply_target(message, chat_id):
         c = load_cache()
         if chat_id in c and rid in c[chat_id]:
             sid = c[chat_id][rid]
+            if not _is_valid_id(sid): return None
             bot_id = await get_bot_id()
-            if bot_id and sid == bot_id: return "BOT_SELF"
+            if bot_id and str(sid) == str(bot_id): return "BOT_SELF"
             return sid
     except Exception as e:
         print(f"⚠️ cache lookup: {e}", flush=True)
@@ -756,7 +815,7 @@ async def find_reply_target(message, chat_id):
                 sid = m.get('sender_id') or m.get('user_id') or m.get('from_id')
             elif hasattr(msg, 'sender_id'):
                 sid = msg.sender_id
-            if sid:
+            if sid and _is_valid_id(sid):
                 sid = str(sid)
                 bot_id = await get_bot_id()
                 if bot_id and sid == bot_id: return "BOT_SELF"
@@ -796,7 +855,7 @@ async def send_long_message(chat_id, text, reply_to_message_id=None):
             result = await bot.send_message(**kwargs)
             if i == 0: first_result = result
             if i < len(parts) - 1:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
         except Exception as e:
             print(f"❌ SEND PART {i}: {e}", flush=True)
     return first_result
@@ -873,6 +932,8 @@ PROFANITY_LIST = [
     "کصخل","کسخل","کص خور","کیرخور","کیر کش","پفیوز","چسی","چس خور","تخمی",
     "تخم سگ","مغز کیر","کص مغز","نناموس","بی حیا","لختی","برهنه","کیرمغز",
 ]
+
+_PROFANITY_NORMALIZED = [normalize_text(w) for w in PROFANITY_LIST if normalize_text(w)]
 
 JOKES = [
     "به یارو میگن چرا زنتو میزنی؟ میگه چون عاشقشم! 😂",
@@ -1369,7 +1430,7 @@ async def get_group_list_text():
                 name = await get_chat_name(gid)
                 link = await get_chat_join_link(gid)
                 group_info_cache[gid] = {"name": name, "link": link}
-                group_info_cache_ttl[gid] = now + 1800
+                group_info_cache_ttl[gid] = now + 3600
             except Exception as e:
                 print(f"⚠️ group info {gid}: {e}", flush=True)
                 name = f"گروه #{i}"
@@ -1412,6 +1473,13 @@ def get_features_text():
         "   📖 قابلیت‌های کامل\n"
         "╰─━━━━━━━━━━━━━━━━━━━─╯\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
+        "🎰 **بازی شرط بندی**\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "├ 📌 `شرط بندی` → راهنما\n"
+        "├ 🟢 `شرط بندی باز` / `باز شرط بندی`\n"
+        "├ 🔴 `شرط بندی بسته` / `بسته شرط بندی`\n"
+        "└ 💡 فقط در گروه\n\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "💬 **سخنگو**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 📌 `فلکس بات` / `فلاکس بات` / `ربات`\n"
@@ -1445,7 +1513,8 @@ def get_features_text():
         "├ 📨 فوروارد (باز/بسته)\n"
         "├ 🎞️ گیف (باز/بسته)\n"
         "├ 👋 خوش‌آمدگویی (باز/بسته)\n"
-        "└ 💬 سخنگو (باز/بسته)\n\n"
+        "├ 💬 سخنگو (باز/بسته)\n"
+        "└ 🎰 شرط بندی (باز/بسته)\n\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "🔒 **قفل گروه**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -1486,6 +1555,7 @@ def get_features_text():
         "━━━━━━━━━━━━━━━━━━━\n"
         "├ 🎲 `دوز` / `دوز قرمز` / `دوز زرد`\n"
         "├ 🪙 `بازی شیر یا خط`\n"
+        "├ 🎰 `شرط بندی`\n"
         "├ 🎯 `چالش`\n"
         "├ 😂 `جک` / 📜 `ضرب المثل`\n"
         "├ 💡 `دانستی` / 🧠 `فکت`\n"
@@ -1540,7 +1610,7 @@ def load_cache():
 
 def save_cache(cache, force=False):
     save_counter["cache"] += 1
-    if not force and save_counter["cache"] % 3 != 0: return
+    if not force and save_counter["cache"] % 5 != 0: return
     total = sum(len(v) if isinstance(v, dict) else 0 for v in cache.values())
     if total > 5000:
         print(f"⚠️ Cache too big ({total}), trimming...", flush=True)
@@ -1572,10 +1642,12 @@ def load_data():
         "anti_repeat": {},
         "slow_mode": {},
         "talkative_disabled": [],
+        "bot_is_active": True,
         "settings": {
             "link": False, "id": False, "spam": False, "hyperlink": False,
             "welcome": True, "warning": False, "filter": True, "auto_ban": True,
             "profanity": True, "forward": False, "gif": False, "goodbye": False,
+            "betting_enabled": True,
         },
     }
     for path in DATA_PATHS:
@@ -1611,19 +1683,15 @@ def save_data(data, force=False):
             print(f"⚠️ save_data: {e}", flush=True)
 
 
-bot_is_active = True
 bot_data = load_data()
+bot_is_active = bot_data.get("bot_is_active", True)
 settings = bot_data.get("settings", {})
 for sk in ["link", "id", "spam", "hyperlink", "warning", "filter", "auto_ban",
            "profanity", "forward", "gif", "goodbye"]:
     if sk not in settings: settings[sk] = False
 if "welcome" not in settings: settings["welcome"] = True
+if "betting_enabled" not in settings: settings["betting_enabled"] = True
 message_cache = load_cache()
-
-group_locks = bot_data.get("group_locks", {})
-temp_locks = bot_data.get("temp_locks", {})
-scheduled_locks = bot_data.get("scheduled_locks", {})
-mute_list = bot_data.get("mute_list", {})
 
 
 async def cleanup_task():
@@ -1633,10 +1701,6 @@ async def cleanup_task():
             now = time.time()
             expired = [k for k, v in waiting_for_code.items() if now - v > 300]
             for k in expired: del waiting_for_code[k]
-            cutoff = now - 30
-            keys = [k for k, v in text_dedup.items() if v < cutoff]
-            for k in keys:
-                if k in text_dedup: del text_dedup[k]
             expired_roles = [k for k, v in username_cache_ttl.items() if now > v]
             for k in expired_roles:
                 username_cache.pop(k, None)
@@ -1645,6 +1709,22 @@ async def cleanup_task():
                 keys = list(processed_messages.keys())
                 for k in keys[:-1000]:
                     processed_messages.pop(k, None)
+            for cid in list(spam_tracker.keys()):
+                for uid in list(spam_tracker[cid].keys()):
+                    entries = spam_tracker[cid][uid]
+                    if isinstance(entries, list):
+                        spam_tracker[cid][uid] = [e for e in entries if now - e.get("t", 0) < SPAM_WINDOW * 2]
+                        if not spam_tracker[cid][uid]:
+                            del spam_tracker[cid][uid]
+                if not spam_tracker.get(cid):
+                    spam_tracker.pop(cid, None)
+            # پاکسازی بازی‌های ماژولار
+            for _game in MODULAR_GAMES:
+                if hasattr(_game, "cleanup"):
+                    try:
+                        _game.cleanup()
+                    except Exception as e:
+                        print(f"⚠️ cleanup {_game.__name__}: {e}", flush=True)
             print(f"🧹 Cleanup | proc_msg={len(processed_messages)} | cache={len(username_cache)}", flush=True)
         except Exception as e:
             print(f"⚠️ cleanup: {e}", flush=True)
@@ -1722,9 +1802,8 @@ def contains_profanity(text):
     if not text: return None
     n = normalize_text(text)
     if not n: return None
-    for w in PROFANITY_LIST:
-        nw = normalize_text(w)
-        if nw and nw in n: return w
+    for nw in _PROFANITY_NORMALIZED:
+        if nw and nw in n: return nw
     return None
 
 
@@ -1910,6 +1989,7 @@ def get_help_text():
         "├ 🐺 `تنظیم اصل [نام]`\n├ 🎭 `تنظیم لقب [نام]`\n"
         "├ 🎨 `فونت [متن]` → فونت‌ساز\n"
         "├ 🎯 `چالش` → چالش روزانه\n"
+        "├ 🎰 `شرط بندی` → بازی شرط\n"
         "├ 💬 `فلکس بات` → جواب رندوم\n"
         "├ 🎟️ `زدن کد دعوت`\n├ 🎫 `کد دعوت من`\n├ ⭐ `امتیاز من`\n"
         "├ 📖 `قابلیت‌های ربات`\n"
@@ -1922,6 +2002,7 @@ def get_help_text():
         "├ 👥 `شرکت` → پیوستن\n"
         "├ 🎯 `1` تا `7` → انداختن مهره\n"
         "├ 🪙 `بازی شیر یا خط` → بازی شانسی\n"
+        "├ 🎰 `شرط بندی` → راهنما\n"
         "└ 🚫 `انصراف` → لغو\n\n"
         "🔓 **قفل‌ها (هر دو ترتیب کار می‌کنه):**\n"
         "├ `لینک باز` / `باز لینک`\n"
@@ -1931,6 +2012,7 @@ def get_help_text():
         "├ `فوروارد قفل` / `قفل فوروارد`\n"
         "├ `گیف روشن` / `روشن گیف`\n"
         "├ `سخنگو بسته` / `بسته سخنگو`\n"
+        "├ `شرط بندی بسته` / `بسته شرط بندی`\n"
         "└ `هایپرلینک باز` / `باز هایپرلینک`\n\n"
         "👑 **مالک / ویژه:**\n"
         "├ ✅ `فعال` / 🛑 `غیرفعال`\n"
@@ -2062,7 +2144,7 @@ async def bulk_cleanup(chat_id, sender_id, limit):
         try:
             await bot.delete_message(chat_id=chat_id, message_id=mid)
             deleted += 1
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.15)
         except Exception as e:
             failed += 1
             print(f"⚠️ bulk delete {mid}: {e}", flush=True)
@@ -2097,7 +2179,7 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
             for mid in ids_to_delete:
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=mid)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.1)
                 except Exception as e:
                     print(f"⚠️ repeat delete {mid}: {e}", flush=True)
             try:
@@ -2128,6 +2210,31 @@ async def handle_slow_mode(chat_id, user_id, seconds, user_info):
         slow_tracker[chat_id][user_id] = now
         return True
     slow_tracker[chat_id][user_id] = now
+    return False
+
+
+async def handle_spam_check(chat_id, sender_id, msg_id, user_info):
+    now = time.time()
+    if chat_id not in spam_tracker: spam_tracker[chat_id] = {}
+    if sender_id not in spam_tracker[chat_id]: spam_tracker[chat_id][sender_id] = []
+    spam_tracker[chat_id][sender_id].append({"t": now, "id": str(msg_id)})
+    spam_tracker[chat_id][sender_id] = [e for e in spam_tracker[chat_id][sender_id] if now - e["t"] < SPAM_WINDOW]
+    entries = spam_tracker[chat_id][sender_id]
+    if len(entries) >= SPAM_LIMIT:
+        ids_to_delete = [e["id"] for e in entries]
+        spam_tracker[chat_id][sender_id] = []
+        for mid in ids_to_delete:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=mid)
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"⚠️ spam delete {mid}: {e}", flush=True)
+        try:
+            if settings.get("warning"):
+                await add_warning(chat_id, sender_id, "ارسال اسپم", user_info=user_info)
+        except Exception as e:
+            print(f"⚠️ spam warn: {e}", flush=True)
+        return True
     return False
 
 
@@ -2221,7 +2328,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
 # ================== MAIN HANDLER ==================
 @bot.on_message()
 async def handle_message(bot, message):
-    global bot_is_active, message_cache, bot_data, settings, text_dedup
+    global bot_is_active, message_cache, bot_data, settings
 
     try:
         try:
@@ -2236,8 +2343,11 @@ async def handle_message(bot, message):
         raw_text = (message.text or "").strip()
         clean_text = clean_message(raw_text)
 
-        invalid_ids = ("", "None", "none", "NULL", "null", "0", "False", "false")
-        is_valid_mid = msg_id and msg_id not in invalid_ids and not msg_id.startswith("<")
+        is_valid_mid = _is_valid_id(msg_id)
+
+        bot_id_cached = BOT_ID_CACHE.get("id")
+        if bot_id_cached and str(sender_id) == str(bot_id_cached):
+            return
 
         if is_valid_mid:
             pm_key = f"{chat_id}:{msg_id}"
@@ -2276,11 +2386,6 @@ async def handle_message(bot, message):
 
         ct = time.time()
         is_owner_check = (str(sender_id) == OWNER_ID)
-        if not is_owner_check:
-            dedup_key = f"{chat_id}:{sender_id}:{raw_text}"
-            last_seen = text_dedup.get(dedup_key, 0)
-            if ct - last_seen < 1.5: return
-            text_dedup[dedup_key] = ct
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
 
@@ -2493,18 +2598,8 @@ async def handle_message(bot, message):
                 if await handle_repeat_check(chat_id, sender_id, msg_id, raw_text, ar_limit, ui):
                     return
 
-        if settings["spam"] and not can_manage:
-            if chat_id not in spam_tracker: spam_tracker[chat_id] = {}
-            if sender_id not in spam_tracker[chat_id]: spam_tracker[chat_id][sender_id] = []
-            spam_tracker[chat_id][sender_id] = [t for t in spam_tracker[chat_id][sender_id] if ct - t < 5]
-            spam_tracker[chat_id][sender_id].append(ct)
-            if len(spam_tracker[chat_id][sender_id]) >= 5:
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
-                        await add_warning(chat_id, sender_id, "اسپم", user_info=ui)
-                except Exception as e:
-                    print(f"⚠️ delete spam: {e}", flush=True)
+        if settings["spam"] and not can_manage and is_valid_mid:
+            if await handle_spam_check(chat_id, sender_id, msg_id, ui):
                 return
 
         if bot_is_active and not can_manage:
@@ -2652,6 +2747,25 @@ async def handle_message(bot, message):
                     "⚡ **FLUXBOT**"))
             return
 
+        # 🔄 قفل دوکلمه‌ای - شرط بندی
+        bet_res = _check_betting_lock(clean_text)
+        if bet_res is not None:
+            if not can_manage: return
+            settings["betting_enabled"] = bet_res
+            bot_data["settings"] = settings
+            save_data(bot_data, force=True)
+            if bet_res:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "🟢 **شرط بندی فعال شد!**\n\n"
+                    "حالا اعضا می‌تونن شرط ببندن.\n\n"
+                    "⚡ **FLUXBOT**"))
+            else:
+                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
+                    "🔴 **شرط بندی غیرفعال شد!**\n\n"
+                    "از این به بعد ربات به شرط بندی جواب نمی‌ده.\n\n"
+                    "⚡ **FLUXBOT**"))
+            return
+
         # 🔄 بقیه قفل‌های دوکلمه‌ای
         lock_words_map = {
             "لینک": "link", "آیدی": "id", "اسپم": "spam", "هایپرلینک": "hyperlink",
@@ -2670,6 +2784,30 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
                                        text=f"✅ **{w}** {status} شد.\n\n⚡ **FLUXBOT**")
                 return
+
+        # ═══════ بازی‌های ماژولار ═══════
+        for _game in MODULAR_GAMES:
+            try:
+                _ctx = {
+                    "bot": bot,
+                    "chat_id": chat_id,
+                    "sender_id": sender_id,
+                    "msg_id": msg_id,
+                    "raw_text": raw_text,
+                    "clean_text": clean_text,
+                    "sender_display": disp,
+                    "can_manage": can_manage,
+                    "message": message,
+                    "points_getter": get_points,
+                    "points_setter": lambda uid, val: bot_data.get("points", {}).__setitem__(str(uid), val) or save_data(bot_data, force=True),
+                    "settings": settings,
+                    "bot_data": bot_data,
+                    "save_data": save_data,
+                }
+                if await _game.handle(_ctx):
+                    return
+            except Exception as e:
+                print(f"❌ {_game.__name__}: {e}", flush=True)
 
         games = get_games()
 
@@ -2847,7 +2985,6 @@ async def handle_message(bot, message):
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
                 g = games[chat_id]
                 started = g.get("started_at", 0)
-                # 🆕 چک بازی قدیمی (گیر کرده بعد از ری‌استارت)
                 if time.time() - started > (GAME_TIMEOUT * 3):
                     print(f"🗑️ [stale-game] پاک شد: {chat_id}", flush=True)
                     del games[chat_id]
@@ -2876,7 +3013,6 @@ async def handle_message(bot, message):
             if chat_id in coin_flip_games:
                 cf = coin_flip_games[chat_id]
                 started = cf.get("started_at", 0)
-                # 🆕 چک بازی قدیمی
                 if time.time() - started > (GAME_TIMEOUT * 3):
                     print(f"🗑️ [stale-coinflip] پاک شد: {chat_id}", flush=True)
                     del coin_flip_games[chat_id]
@@ -3204,6 +3340,7 @@ async def handle_message(bot, message):
             s.append(f"🐌 حالت آهسته: {'🔴 ' + format_duration(slow) if slow else '🟢 غیرفعال'}")
             tk = "🟢 فعال" if is_talkative_enabled(chat_id) else "🔴 غیرفعال"
             s.append(f"💬 سخنگو: {tk}")
+            s.append(f"🎰 شرط بندی: {'🟢 فعال' if settings.get('betting_enabled', True) else '🔴 غیرفعال'}")
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "🔒 **قفل گروه**\n━━━━━━━━━━━━━━━━━━━\n\n" + "\n\n".join(s) + "\n\n⚡ **FLUXBOT**"))
             return
@@ -3216,6 +3353,8 @@ async def handle_message(bot, message):
             if not can_manage: return
             msg = "✅ از قبل فعال." if bot_is_active else "✅ فعال شد."
             bot_is_active = True
+            bot_data["bot_is_active"] = True
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
 
@@ -3223,6 +3362,8 @@ async def handle_message(bot, message):
             if not is_owner_group: return
             msg = "⛔ از قبل غیرفعال." if not bot_is_active else "🛑 غیرفعال شد."
             bot_is_active = False
+            bot_data["bot_is_active"] = False
+            save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, text=msg, reply_to_message_id=message.message_id)
             return
 
@@ -3433,7 +3574,8 @@ async def handle_message(bot, message):
                 f"🔁 ضد تکرار: {ars}\n"
                 f"🐌 حالت آهسته: {slows}\n"
                 f"📜 قوانین: {rs}\n"
-                f"💬 سخنگو: {tk}\n\n⚡ **FLUXBOT**"))
+                f"💬 سخنگو: {tk}\n"
+                f"🎰 شرط بندی: {st(settings.get('betting_enabled', True))}\n\n⚡ **FLUXBOT**"))
             return
 
         am = re.match(r"^تنظیم\s+اصل\s+(.+)$", clean_text)
@@ -3503,7 +3645,8 @@ async def handle_message(bot, message):
 async def main():
     print("🤖 FLUXBOT STARTING...", flush=True)
     print(f"👑 OWNER: {OWNER_ID}", flush=True)
-    print(f"💬 KEYWORDS: {len(TALKATIVE_MAP)} | PHRASES: {len(TALKATIVE_PHRASES)} | JOKES: {len(JOKES)}", flush=True)
+    print(f"💬 KEYWORDS: {len(TALKATIVE_MAP)} | JOKES: {len(JOKES)} | BOT_ACTIVE: {bot_is_active}", flush=True)
+    print(f"🎮 MODULAR GAMES: {len(MODULAR_GAMES)}", flush=True)
     try: asyncio.create_task(cleanup_task())
     except: pass
     try: asyncio.create_task(group_cleanup_task())
