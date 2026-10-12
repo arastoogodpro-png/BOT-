@@ -78,6 +78,7 @@ coin_flip_games = {}
 EMPTY = "⚫"
 RED = "🔴"
 YELLOW = "🟡"
+USER_MENTION_TOKEN = "\ue000USER\ue001"
 
 
 # ================== 🔧 ZWNJ + Punctuation Helper ==================
@@ -682,6 +683,63 @@ def api_result_ok(result):
     return status not in ("error", "failed", "fail", "nok")
 
 
+def _utf16_length(text):
+    return len(str(text).encode("utf-16-le")) // 2
+
+
+async def send_user_mention_message(chat_id, user_id, text, reply_to_message_id=None, bot_client=None):
+    """Send a message with a native, clickable Rubika MentionText; fall back safely."""
+    client = bot_client or bot
+    text = str(text or "")
+    marker_index = text.find(USER_MENTION_TOKEN)
+    if marker_index < 0:
+        return await client.send_message(
+            chat_id=chat_id, text=text, reply_to_message_id=reply_to_message_id
+        )
+
+    label = "کاربر"
+    rendered_text = (
+        text[:marker_index] + label +
+        text[marker_index + len(USER_MENTION_TOKEN):]
+    )
+
+    # MentionText is supported only in groups. Its offsets are UTF-16 units,
+    # not Python character indexes (important when emojis precede the mention).
+    if is_group_chat(chat_id) and user_id:
+        payload = {
+            "chat_id": str(chat_id),
+            "text": rendered_text,
+            "metadata": {
+                "meta_data_parts": [{
+                    "type": "MentionText",
+                    "from_index": _utf16_length(text[:marker_index]),
+                    "length": _utf16_length(label),
+                    "mention_text_user_id": str(user_id),
+                }]
+            },
+        }
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = str(reply_to_message_id)
+        try:
+            post = getattr(client, "_post", None)
+            if callable(post):
+                result = post("sendMessage", payload)
+                if hasattr(result, "__await__"):
+                    result = await result
+                if api_result_ok(result):
+                    return result
+                print("⚠️ MentionText رد شد؛ ارسال پیام بدون پیوند انجام می‌شود.", flush=True)
+        except Exception as e:
+            print(f"⚠️ MentionText: {e}", flush=True)
+
+    # Unsupported SDK/API metadata must never prevent the moderation notice.
+    return await client.send_message(
+        chat_id=chat_id,
+        text=rendered_text,
+        reply_to_message_id=reply_to_message_id,
+    )
+
+
 async def get_user_info(chat_id, user_id, force=False):
     key = f"{chat_id}:{user_id}"
     now = time.time()
@@ -795,37 +853,25 @@ def save_known_user(user_id, name=None, username=None):
         save_data(bot_data)
 
 
+def _safe_display_name(value, user_id=None):
+    if not value:
+        return None
+    name = re.sub(r"(?<![\w])@[A-Za-z0-9_.]+", "", str(value)).strip(" \t\r\n,،")
+    if not name or (user_id is not None and name == str(user_id)):
+        return None
+    return name
+
+
 def get_display_for_user(user_id):
     uid = str(user_id)
-    now = time.time()
-    for k, v in username_cache.items():
-        ttl = username_cache_ttl.get(k, 0)
-        if now < ttl and k.endswith(f":{uid}"):
-            if v.get("username"): return f"@{v['username']}"
-            if v.get("name"): return v["name"]
     ku = bot_data.get("known_users", {}).get(uid, {})
-    if ku.get("username"): return f"@{ku['username']}"
-    if ku.get("name"): return ku["name"]
-    short = uid[1:] if uid.startswith(("u", "b")) else uid
-    return f"کاربر `{short[:10]}`"
+    name = _safe_display_name(ku.get("name"), uid) if isinstance(ku, dict) else None
+    return name or "کاربر"
 
 
 def format_user_display(ui, uid):
     ui = ui if isinstance(ui, dict) else {}
-    username = ui.get("username")
-    if not username:
-        known = bot_data.get("known_users", {})
-        known_user = known.get(str(uid), {}) if isinstance(known, dict) else {}
-        if isinstance(known_user, dict):
-            username = known_user.get("username")
-    if not username:
-        for key, cached in username_cache.items():
-            if key.endswith(f":{uid}") and isinstance(cached, dict) and cached.get("username"):
-                username = cached["username"]
-                break
-    if username: return f"@{str(username).lstrip('@')}"
-    if ui.get("name"): return str(ui["name"])
-    return get_display_for_user(uid)
+    return _safe_display_name(ui.get("name"), uid) or get_display_for_user(uid)
 
 
 async def get_bot_id():
@@ -1993,20 +2039,41 @@ def get_remaining_time(end_time):
 
 
 def is_group_locked(chat_id):
-    if bot_data.get("group_locks", {}).get(chat_id, False): return True, "قفل دستی"
+    group_locks = bot_data.get("group_locks", {})
+    if not isinstance(group_locks, dict):
+        group_locks = {}
+        bot_data["group_locks"] = group_locks
+    if group_locks.get(chat_id, False): return True, "قفل دستی"
     temp_locks_now = bot_data.get("temp_locks", {})
+    if not isinstance(temp_locks_now, dict):
+        temp_locks_now = {}
+        bot_data["temp_locks"] = temp_locks_now
     if chat_id in temp_locks_now:
-        et = temp_locks_now[chat_id]
+        try:
+            et = float(temp_locks_now[chat_id])
+        except (TypeError, ValueError):
+            et = 0
         if time.time() < et:
+            temp_locks_now[chat_id] = et
             return True, f"قفل موقت (پایان: {datetime.fromtimestamp(et, tz=IRAN_TZ).strftime('%H:%M')})"
         else:
             del temp_locks_now[chat_id]
             save_data(bot_data)
     scheduled = bot_data.get("scheduled_locks", {})
+    if not isinstance(scheduled, dict):
+        scheduled = {}
+        bot_data["scheduled_locks"] = scheduled
     if chat_id in scheduled and scheduled[chat_id]:
         now = get_local_now()
         cm = now.hour * 60 + now.minute
-        for sh, sm, eh, em in scheduled[chat_id]:
+        for interval in scheduled[chat_id]:
+            try:
+                sh, sm, eh, em = map(int, interval)
+                if not (0 <= sh <= 23 and 0 <= sm <= 59 and
+                        0 <= eh <= 23 and 0 <= em <= 59):
+                    continue
+            except (TypeError, ValueError):
+                continue
             s, e = sh * 60 + sm, eh * 60 + em
             ts = f"{sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}"
             if s <= e:
@@ -2042,18 +2109,16 @@ async def add_warning(chat_id, user_id, reason="", user_info=None):
         except (TypeError, ValueError):
             limit = 3
         save_data(bot_data, force=True)
-        if user_info is None: user_info = await get_user_info(chat_id, user_id)
-        display = format_user_display(user_info, user_id)
         del_after = get_warn_delete_after(chat_id)
         wt = (
-            f"⚠️ **اخطار ثبت شد** ⚠️\n\n"
-            f"👤 **کاربر:** **{display}**\n"
-            f"📌 **دلیل:** {reason if reason else 'تخلف از قوانین'}\n"
-            f"📊 **تعداد اخطارها:** **{count} از {limit}**\n\n"
-            f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
+            f"⚠️ اخطار ثبت شد ⚠️\n\n"
+            f"👤 کاربر: {USER_MENTION_TOKEN}\n"
+            f"📌 دلیل: {reason if reason else 'تخلف از قوانین'}\n"
+            f"📊 تعداد اخطارها: {count} از {limit}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n⚡ FLUXBOT"
         )
         try:
-            result = await bot.send_message(chat_id=chat_id, text=wt)
+            result = await send_user_mention_message(chat_id, user_id, wt)
             if del_after > 0:
                 mid = extract_msg_id(result)
                 if mid: await schedule_delete(chat_id, mid, del_after)
@@ -2069,12 +2134,12 @@ async def add_warning(chat_id, user_id, reason="", user_info=None):
                 bot_data["banned_users"][chat_id][user_id] = time.time()
                 save_data(bot_data, force=True)
                 bm = (
-                    f"🚫 **کاربر اخراج شد**\n\n"
-                    f"👤 **کاربر:** **{display}**\n"
-                    f"📊 **تعداد اخطارها:** **{count} از {limit}**"
+                    f"🚫 کاربر اخراج شد\n\n"
+                    f"👤 کاربر: {USER_MENTION_TOKEN}\n"
+                    f"📊 تعداد اخطارها: {count} از {limit}"
                 )
                 try:
-                    result = await bot.send_message(chat_id=chat_id, text=bm)
+                    result = await send_user_mention_message(chat_id, user_id, bm)
                     if del_after > 0:
                         mid = extract_msg_id(result)
                         if mid: await schedule_delete(chat_id, mid, del_after)
@@ -2431,14 +2496,13 @@ async def handle_repeat_check(chat_id, user_id, msg_id, text, limit, user_info):
                 except Exception as e:
                     print(f"⚠️ repeat delete {mid}: {e}", flush=True)
             try:
-                display = format_user_display(user_info, user_id)
                 if settings.get("warning"):
                     await add_warning(chat_id, user_id, f"ارسال {limit} پیام یکسان پشت سر هم", user_info=user_info)
                 else:
-                    await bot.send_message(chat_id=chat_id, text=(
-                        f"🔁 **ضد تکرار فعال است!**\n\n"
-                        f"👤 {display}\n"
-                        f"📌 {limit} پیام یکسان شما پاک شد.\n\n⚡ **FLUXBOT**"))
+                    await send_user_mention_message(chat_id, user_id, (
+                        f"🔁 ضد تکرار فعال است!\n\n"
+                        f"👤 {USER_MENTION_TOKEN}\n"
+                        f"📌 {limit} پیام یکسان شما پاک شد.\n\n⚡ FLUXBOT"))
             except Exception as e:
                 print(f"⚠️ repeat warn: {e}", flush=True)
             return True
@@ -3441,14 +3505,18 @@ async def handle_message(bot, message):
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
-            ti = await get_user_info(chat_id, tgt)
-            td = format_user_display(ti, tgt)
             if chat_id in bot_data["special_users"] and tgt in bot_data["special_users"][chat_id]:
                 del bot_data["special_users"][chat_id][tgt]
                 save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, text=f"✅ **{td} از ویژه حذف شد.**", reply_to_message_id=message.message_id)
+                await send_user_mention_message(
+                    chat_id, tgt, f"✅ {USER_MENTION_TOKEN} از ویژه حذف شد.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             else:
-                await bot.send_message(chat_id=chat_id, text=f"ℹ️ **{td}** ویژه نیست.", reply_to_message_id=message.message_id)
+                await send_user_mention_message(
+                    chat_id, tgt, f"ℹ️ {USER_MENTION_TOKEN} ویژه نیست.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             return
 
         if is_command(clean_text, "ویژه", "ادمین"):
@@ -3458,15 +3526,19 @@ async def handle_message(bot, message):
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
-            ti = await get_user_info(chat_id, tgt)
-            td = format_user_display(ti, tgt)
             if chat_id not in bot_data["special_users"]: bot_data["special_users"][chat_id] = {}
             if bot_data["special_users"][chat_id].get(tgt, False):
-                await bot.send_message(chat_id=chat_id, text=f"ℹ️ **{td}** از قبل ویژه است.", reply_to_message_id=message.message_id)
+                await send_user_mention_message(
+                    chat_id, tgt, f"ℹ️ {USER_MENTION_TOKEN} از قبل ویژه است.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
                 return
             bot_data["special_users"][chat_id][tgt] = True
             save_data(bot_data, force=True)
-            await bot.send_message(chat_id=chat_id, text=f"⭐ **{td} ویژه شد!**", reply_to_message_id=message.message_id)
+            await send_user_mention_message(
+                chat_id, tgt, f"⭐ {USER_MENTION_TOKEN} ویژه شد!",
+                reply_to_message_id=message.message_id, bot_client=bot,
+            )
             return
 
         wam = re.match(r"^حذف\s+اخطار(?:\s+(\d+))?$", clean_text)
@@ -3481,10 +3553,11 @@ async def handle_message(bot, message):
             if "warnings" not in bot_data: bot_data["warnings"] = {}
             if chat_id not in bot_data["warnings"]: bot_data["warnings"][chat_id] = {}
             current = bot_data["warnings"][chat_id].get(target_uid, 0)
-            target_info = await get_user_info(chat_id, target_uid)
-            target_disp = format_user_display(target_info, target_uid)
             if current == 0:
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"ℹ️ **{target_disp}** اخطاری ندارد.")
+                await send_user_mention_message(
+                    chat_id, target_uid, f"ℹ️ برای {USER_MENTION_TOKEN} اخطاری ثبت نشده است.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
                 return
             if amount_str:
                 amount = int(amount_str)
@@ -3492,12 +3565,19 @@ async def handle_message(bot, message):
                 removed = min(amount, current)
                 bot_data["warnings"][chat_id][target_uid] = current - removed
                 save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                    f"✅ **{removed} اخطار از {target_disp} حذف شد.**\n\n📊 باقی‌مانده: [{current - removed}/{bot_data['warn_limit'].get(chat_id, 3)}]"))
+                await send_user_mention_message(
+                    chat_id, target_uid,
+                    f"✅ {removed} اخطار از {USER_MENTION_TOKEN} حذف شد.\n\n"
+                    f"📊 باقی‌مانده: {current - removed} از {bot_data['warn_limit'].get(chat_id, 3)}",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             else:
                 bot_data["warnings"][chat_id][target_uid] = 0
                 save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"✅ **تمام اخطارهای {target_disp} پاک شد.**")
+                await send_user_mention_message(
+                    chat_id, target_uid, f"✅ تمام اخطارهای {USER_MENTION_TOKEN} پاک شد.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             return
 
         dtm = re.match(r"^حذف\s+(\d+)$", clean_text)
@@ -3592,13 +3672,36 @@ async def handle_message(bot, message):
             gl = bot_data.get("group_locks", {}).get(chat_id, False)
             tl = bot_data.get("temp_locks", {}).get(chat_id)
             sl_list = bot_data.get("scheduled_locks", {}).get(chat_id, [])
-            s.append("🔴 قفل دستی: فعال" if gl else "🟢 قفل دستی: غیرفعال")
-            if tl: s.append(f"🟡 موقت: {get_remaining_time(tl)}")
-            else: s.append("🟢 موقت: غیرفعال")
+            current_locked, current_reason = is_group_locked(chat_id)
+            s.append("🔴 قفل دستی: بسته" if gl else "🟢 قفل دستی: باز")
+            try:
+                temp_active = bool(tl) and float(tl) > time.time()
+            except (TypeError, ValueError):
+                temp_active = False
+            if temp_active:
+                s.append(f"🔴 قفل موقت: بسته ({get_remaining_time(float(tl))})")
+            else:
+                s.append("🟢 قفل موقت: باز")
             if sl_list:
-                sl = "\n".join([f"  • {sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}" for sh, sm, eh, em in sl_list])
-                s.append(f"🟡 زمان‌بندی:\n{sl}")
-            else: s.append("🟢 زمان‌بندی: غیرفعال")
+                sl = []
+                for interval in sl_list:
+                    try:
+                        sh, sm, eh, em = map(int, interval)
+                        if not (0 <= sh <= 23 and 0 <= sm <= 59 and
+                                0 <= eh <= 23 and 0 <= em <= 59):
+                            continue
+                        sl.append(f"  • {sh:02d}:{sm:02d} تا {eh:02d}:{em:02d}")
+                    except (TypeError, ValueError):
+                        continue
+                schedule_state = (
+                    "🔴 بسته" if current_locked and "زمان‌بندی" in current_reason
+                    else "🟢 باز"
+                )
+                schedule_text = "\n".join(sl) if sl else "مورد معتبری ثبت نشده است."
+                s.append(f"⏰ زمان‌بندی: {schedule_state}\n{schedule_text}")
+            else:
+                s.append("⏰ زمان‌بندی: 🟢 باز")
+            s.append(f"🔒 وضعیت فعلی گروه: {'🔴 بسته' if current_locked else '🟢 باز'}")
             ar = bot_data.get("anti_repeat", {}).get(chat_id)
             s.append(f"🔁 ضد تکرار: {'🔴 ' + str(ar) + ' پیام یکسان' if ar else '🟢 غیرفعال'}")
             slow = bot_data.get("slow_mode", {}).get(chat_id)
@@ -3659,13 +3762,14 @@ async def handle_message(bot, message):
                 return
             if tgt == OWNER_ID: return
             try:
-                ti = await get_user_info(chat_id, tgt)
-                td = format_user_display(ti, tgt)
                 await bot.ban_member_chat(chat_id, tgt)
                 if chat_id not in bot_data["banned_users"]: bot_data["banned_users"][chat_id] = {}
                 bot_data["banned_users"][chat_id][tgt] = time.time()
                 save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🚫 **{td} اخراج شد!**")
+                await send_user_mention_message(
+                    chat_id, tgt, f"🚫 {USER_MENTION_TOKEN} از گروه اخراج شد.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             except Exception as e:
                 print(f"⚠️ ban: {e}", flush=True)
             return
@@ -3678,13 +3782,14 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
             try:
-                ti = await get_user_info(chat_id, tgt)
-                td = format_user_display(ti, tgt)
                 await bot.unban_member_chat(chat_id, tgt)
                 if chat_id in bot_data["banned_users"] and tgt in bot_data["banned_users"][chat_id]:
                     del bot_data["banned_users"][chat_id][tgt]
                     save_data(bot_data, force=True)
-                await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"✅ **{td} آنبن شد!**")
+                await send_user_mention_message(
+                    chat_id, tgt, f"✅ مسدودیت {USER_MENTION_TOKEN} برداشته شد.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             except Exception as e:
                 print(f"⚠️ unban: {e}", flush=True)
             return
@@ -3791,20 +3896,22 @@ async def handle_message(bot, message):
             if not tgt:
                 await bot.send_message(chat_id=chat_id, text="⚠️ روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
                 return
-            ti = await get_user_info(chat_id, tgt)
-            await add_warning(chat_id, tgt, "اخطار دستی مالک", user_info=ti)
+            await add_warning(chat_id, tgt, "اخطار دستی مالک")
             return
 
         if is_command(clean_text, "لیست قفل"):
             if not can_manage: return
 
-            def _stat(v):
+            def _lock_stat(v):
+                return "🔴 بسته" if v else "🟢 باز"
+
+            def _feature_stat(v):
                 return "🟢 فعال" if v else "🔴 غیرفعال"
 
             wl = bot_data["warn_limit"].get(chat_id, 3)
             fc = len(ensure_list_dict(bot_data, "filtered_words", chat_id))
             gl, gr = is_group_locked(chat_id)
-            gs = f"🟢 فعال ({gr})" if gl else "🔴 غیرفعال"
+            gs = f"🔴 بسته ({gr})" if gl else "🟢 باز"
             wda = get_warn_delete_after(chat_id)
             if wda > 0:
                 m, s = wda // 60, wda % 60
@@ -3817,21 +3924,21 @@ async def handle_message(bot, message):
             slows = f"🟢 فعال ({format_duration(slow)})" if slow else "🔴 غیرفعال"
             rl = bot_data.get("rules", {}).get(chat_id)
             rs = "🟢 تنظیم شده" if rl else "🔴 تنظیم نشده"
-            tk = "🟢 فعال" if is_talkative_enabled(chat_id) else "🔴 غیرفعال"
-            bets = _stat(settings.get("betting_enabled", True))
+            tk = _feature_stat(is_talkative_enabled(chat_id))
+            bets = _feature_stat(settings.get("betting_enabled", True))
 
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
                 "📋 **قفل‌ها**\n━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🔗 لینک: {_stat(settings['link'])}\n"
-                f"🆔 آیدی: {_stat(settings['id'])}\n"
-                f"📢 اسپم: {_stat(settings['spam'])}\n"
-                f"🔗 هایپرلینک: {_stat(settings['hyperlink'])}\n"
-                f"👋 خوش‌آمد: {_stat(settings.get('welcome', True))}\n"
-                f"🤬 فحش: {_stat(settings.get('profanity', True))}\n"
-                f"📨 فوروارد: {_stat(settings.get('forward', False))}\n"
-                f"🎞️ گیف: {_stat(settings.get('gif', False))}\n"
+                f"🔗 لینک: {_lock_stat(settings['link'])}\n"
+                f"🆔 آیدی: {_lock_stat(settings['id'])}\n"
+                f"📢 اسپم: {_lock_stat(settings['spam'])}\n"
+                f"🔗 هایپرلینک: {_lock_stat(settings['hyperlink'])}\n"
+                f"👋 خوش‌آمد: {_feature_stat(settings.get('welcome', True))}\n"
+                f"🤬 فحش: {_lock_stat(settings.get('profanity', True))}\n"
+                f"📨 فوروارد: {_lock_stat(settings.get('forward', False))}\n"
+                f"🎞️ گیف: {_lock_stat(settings.get('gif', False))}\n"
                 f"🔒 قفل گروه: {gs}\n"
-                f"⚠️ اخطار: {_stat(settings['warning'])} ({wl})\n"
+                f"⚠️ اخطار: {_feature_stat(settings['warning'])} ({wl})\n"
                 f"⏱️ حذف اخطار: {wds}\n"
                 f"🚫 فیلتر: {fc}/{MAX_FILTER_WORDS}\n"
                 f"🔁 ضد تکرار: {ars}\n"
