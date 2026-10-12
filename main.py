@@ -2906,70 +2906,71 @@ async def handle_message(bot, message):
                 return
 
         # ═══════ فیلترهای محتوا — اینجا ID اول از همه ═══════
-        if bot_is_active and not can_manage:
+        _live_settings = bot_data.get("settings") if isinstance(bot_data.get("settings"), dict) else settings
+        if bot_is_active:
             # 🆔 آیدی — اول چک می‌شه
-            if settings.get("id", False) and contains_id(raw_text):
+            if _live_settings.get("id", False) and contains_id(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
+                    if _live_settings.get("warning"):
                         await add_warning(chat_id, sender_id, "ارسال آیدی", user_info=ui)
                     print(f"🗑️ [ID] پاک شد | {chat_id} | {raw_text[:40]}", flush=True)
                 except Exception as e:
                     print(f"⚠️ delete ID failed: {e}", flush=True)
                 return
             # 🔗 لینک
-            if settings.get("link", False) and contains_link(raw_text):
+            if _live_settings.get("link", False) and contains_link(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
+                    if _live_settings.get("warning"):
                         await add_warning(chat_id, sender_id, "لینک", user_info=ui)
                     print(f"🗑️ [LINK] پاک شد | {chat_id}", flush=True)
                 except Exception as e:
                     print(f"⚠️ delete link failed: {e}", flush=True)
                 return
             # 🔗 هایپرلینک
-            if settings.get("hyperlink", False) and contains_hyperlink(raw_text):
+            if _live_settings.get("hyperlink", False) and contains_hyperlink(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
+                    if _live_settings.get("warning"):
                         await add_warning(chat_id, sender_id, "هایپرلینک", user_info=ui)
                 except Exception as e:
                     print(f"⚠️ delete hyperlink failed: {e}", flush=True)
                 return
             # 🤬 فحش
-            if settings.get("profanity", True) and contains_profanity(raw_text):
+            if _live_settings.get("profanity", True) and contains_profanity(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
+                    if _live_settings.get("warning"):
                         await add_warning(chat_id, sender_id, "فحش", user_info=ui)
                 except Exception as e:
                     print(f"⚠️ delete profanity failed: {e}", flush=True)
                 return
             # 🚫 کلمه فیلترشده
-            if settings.get("filter", True):
+            if _live_settings.get("filter", True):
                 fl = ensure_list_dict(bot_data, "filtered_words", chat_id)
                 if contains_filtered_word(raw_text, fl):
                     try:
                         await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                        if settings.get("warning"):
+                        if _live_settings.get("warning"):
                             await add_warning(chat_id, sender_id, "کلمه فیلترشده", user_info=ui)
                     except Exception as e:
                         print(f"⚠️ delete filter failed: {e}", flush=True)
                     return
             # 📨 فوروارد
-            if settings.get("forward", False) and is_forwarded(message):
+            if _live_settings.get("forward", False) and is_forwarded(message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
+                    if _live_settings.get("warning"):
                         await add_warning(chat_id, sender_id, "فوروارد", user_info=ui)
                 except Exception as e:
                     print(f"⚠️ delete forward failed: {e}", flush=True)
                 return
             # 🎞️ گیف
-            if settings.get("gif", False) and is_gif(message):
+            if _live_settings.get("gif", False) and is_gif(message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
-                    if settings.get("warning"):
+                    if _live_settings.get("warning"):
                         await add_warning(chat_id, sender_id, "گیف", user_info=ui)
                 except Exception as e:
                     print(f"⚠️ delete gif failed: {e}", flush=True)
