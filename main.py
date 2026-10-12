@@ -533,12 +533,17 @@ def get_games():
     return bot_data["games"]
 
 
-async def game_timeout_check(chat_id, game_type):
+async def game_timeout_check(chat_id, game_type, started_at=None):
     try:
         await asyncio.sleep(GAME_TIMEOUT)
         if game_type == "connect4":
             games = get_games()
-            if chat_id in games and games[chat_id].get("status") == "waiting":
+            game = games.get(chat_id)
+            same_game = (
+                game is not None
+                and (started_at is None or game.get("started_at") == started_at)
+            )
+            if same_game and game.get("status") == "waiting":
                 del games[chat_id]
                 save_data(bot_data, force=True)
                 try:
@@ -548,7 +553,12 @@ async def game_timeout_check(chat_id, game_type):
                     print(f"⏱️ Connect4 timeout: {chat_id}", flush=True)
                 except: pass
         elif game_type == "coinflip":
-            if chat_id in coin_flip_games:
+            game = coin_flip_games.get(chat_id)
+            same_game = (
+                game is not None
+                and (started_at is None or game.get("started_at") == started_at)
+            )
+            if same_game:
                 del coin_flip_games[chat_id]
                 try:
                     await bot.send_message(chat_id=chat_id, text=(
@@ -574,16 +584,17 @@ async def start_game(chat_id, sender_id, sender_display, color_choice):
                 return None
     color1 = "R" if color_choice == "قرمز" else "Y" if color_choice == "زرد" else "R"
     color2 = "Y" if color1 == "R" else "R"
+    started_at = time.time()
     games[chat_id] = {
         "player1": str(sender_id), "player1_name": sender_display,
         "player2": None, "player2_name": None,
         "color1": color1, "color2": color2,
         "board": [[None]*7 for _ in range(6)],
         "turn": str(sender_id), "status": "waiting",
-        "started_at": time.time(),
+        "started_at": started_at,
     }
     save_data(bot_data, force=True)
-    try: asyncio.create_task(game_timeout_check(chat_id, "connect4"))
+    try: asyncio.create_task(game_timeout_check(chat_id, "connect4", started_at))
     except: pass
     return games[chat_id]
 
@@ -661,6 +672,16 @@ def extract_msg_id(result):
     return None
 
 
+def api_result_ok(result):
+    """Recognize explicit API failures while accepting normal/empty responses."""
+    if not isinstance(result, dict):
+        return True
+    if result.get("ok") is False:
+        return False
+    status = str(result.get("status", "")).strip().lower()
+    return status not in ("error", "failed", "fail", "nok")
+
+
 async def get_user_info(chat_id, user_id, force=False):
     key = f"{chat_id}:{user_id}"
     now = time.time()
@@ -672,26 +693,64 @@ async def get_user_info(chat_id, user_id, force=False):
     try:
         mi = await bot.get_chat_member(chat_id, user_id)
         if mi:
-            data = mi.get("data", mi) if isinstance(mi, dict) else mi
-            cm = {}
-            if isinstance(data, dict):
-                cm = data.get("chat_member") or data.get("member") or data
-            if not isinstance(cm, dict):
-                cm = {}
-            info["name"] = (
-                cm.get("first_name") or cm.get("firstName") or
-                cm.get("name") or cm.get("title") or
-                cm.get("display_name")
+            data = mi
+            for _ in range(3):
+                if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                    data = data["data"]
+                else:
+                    break
+            if not isinstance(data, dict):
+                try:
+                    data = vars(data)
+                except (TypeError, AttributeError):
+                    data = {}
+
+            member = (
+                data.get("chat_member") or data.get("chatMember") or
+                data.get("member") or data
             )
-            un = cm.get("username") or cm.get("user_name") or cm.get("userName")
+            if not isinstance(member, dict):
+                try:
+                    member = vars(member)
+                except (TypeError, AttributeError):
+                    member = {}
+
+            user = (
+                member.get("user") or member.get("user_info") or
+                member.get("userInfo") or data.get("user") or {}
+            )
+            if not isinstance(user, dict):
+                try:
+                    user = vars(user)
+                except (TypeError, AttributeError):
+                    user = {}
+
+            # Rubika may put profile fields inside `user` and role fields
+            # beside it in `chat_member`; check both without losing either.
+            sources = (member, user, data)
+            def _first_user_value(*keys):
+                for source in sources:
+                    if not isinstance(source, dict):
+                        continue
+                    for key in keys:
+                        value = source.get(key)
+                        if value is None or value is False or value == "":
+                            continue
+                        if isinstance(value, (dict, list, tuple, set)) and not value:
+                            continue
+                        return value
+                return None
+
+            info["name"] = _first_user_value(
+                "first_name", "firstName", "name", "title", "display_name",
+                "displayName",
+            )
+            un = _first_user_value("username", "user_name", "userName")
             if un: info["username"] = str(un).lstrip("@")
-            status_raw = (
-                cm.get("status") or cm.get("member_type") or cm.get("memberType") or
-                cm.get("role") or cm.get("type") or cm.get("chat_member_type") or
-                cm.get("membership") or ""
+            status_raw = _first_user_value(
+                "status", "member_type", "memberType", "role", "type",
+                "chat_member_type", "chatMemberType", "membership",
             )
-            if not status_raw and isinstance(data, dict):
-                status_raw = data.get("status") or data.get("member_type") or ""
             st = str(status_raw or "").strip().lower().replace("_", "").replace("-", "").replace(" ", "")
             role = "عضو"
             if st in ("creator", "owner", "admincreator", "ownercreator", "superadmin", "chatcreator"):
@@ -701,11 +760,11 @@ async def get_user_info(chat_id, user_id, force=False):
             elif st in ("member", "user", "participant", "regular", "normal", "ordinary"):
                 role = "عضو"
             if role == "عضو":
-                if cm.get("is_creator") or cm.get("isCreator") or cm.get("is_owner") or cm.get("isOwner"):
+                if _first_user_value("is_creator", "isCreator", "is_owner", "isOwner"):
                     role = "مالک"
-                elif cm.get("is_admin") or cm.get("isAdmin") or cm.get("is_administrator") or cm.get("isAdministrator"):
+                elif _first_user_value("is_admin", "isAdmin", "is_administrator", "isAdministrator"):
                     role = "ادمین"
-            perms = cm.get("permissions") or cm.get("rights") or {}
+            perms = _first_user_value("permissions", "rights") or {}
             if isinstance(perms, dict) and role == "عضو":
                 if perms.get("is_creator") or perms.get("is_owner"):
                     role = "مالک"
@@ -752,8 +811,20 @@ def get_display_for_user(user_id):
 
 
 def format_user_display(ui, uid):
-    if ui.get("username"): return f"@{ui['username']}"
-    if ui.get("name"): return ui["name"]
+    ui = ui if isinstance(ui, dict) else {}
+    username = ui.get("username")
+    if not username:
+        known = bot_data.get("known_users", {})
+        known_user = known.get(str(uid), {}) if isinstance(known, dict) else {}
+        if isinstance(known_user, dict):
+            username = known_user.get("username")
+    if not username:
+        for key, cached in username_cache.items():
+            if key.endswith(f":{uid}") and isinstance(cached, dict) and cached.get("username"):
+                username = cached["username"]
+                break
+    if username: return f"@{str(username).lstrip('@')}"
+    if ui.get("name"): return str(ui["name"])
     return get_display_for_user(uid)
 
 
@@ -784,23 +855,62 @@ def extract_reply_info(message):
               getattr(message, 'reply_message', None) or
               getattr(message, 'reply_to', None))
         if rt:
-            if hasattr(rt, 'message_id'): result["reply_id"] = str(rt.message_id)
-            elif hasattr(rt, 'id'): result["reply_id"] = str(rt.id)
-            elif isinstance(rt, dict):
-                mid = rt.get('message_id') or rt.get('id')
-                if mid: result["reply_id"] = str(mid)
-            if hasattr(rt, 'sender_id'): result["sender_id"] = str(rt.sender_id)
-            elif hasattr(rt, 'user_id'): result["sender_id"] = str(rt.user_id)
-            elif hasattr(rt, 'from_id'): result["sender_id"] = str(rt.from_id)
-            elif hasattr(rt, 'sender'):
-                s = rt.sender
-                if hasattr(s, 'id'): result["sender_id"] = str(s.id)
-                elif isinstance(s, dict):
-                    sid = s.get('id') or s.get('user_id')
-                    if sid: result["sender_id"] = str(sid)
-            elif isinstance(rt, dict):
-                sid = rt.get('sender_id') or rt.get('user_id') or rt.get('from_id')
-                if sid: result["sender_id"] = str(sid)
+            pending = [(rt, True, False)]
+            seen = set()
+            while pending:
+                item, is_message, is_sender = pending.pop(0)
+                marker = id(item)
+                if (marker, is_message, is_sender) in seen:
+                    continue
+                seen.add((marker, is_message, is_sender))
+                if isinstance(item, dict):
+                    if is_message and not result["reply_id"]:
+                        mid = item.get("message_id") or item.get("messageId")
+                        if not mid and item.get("id") and not isinstance(item.get("id"), dict):
+                            mid = item.get("id")
+                        if mid: result["reply_id"] = str(mid)
+                    if not result["sender_id"]:
+                        sid = item.get("sender_id") or item.get("user_id") or item.get("from_id")
+                        if not sid and is_sender:
+                            sid = item.get("id")
+                        if sid and not isinstance(sid, (dict, list)):
+                            result["sender_id"] = str(sid)
+                    for key in ("sender", "from", "from_user", "user", "message", "reply_to_message"):
+                        nested = item.get(key)
+                        if nested is not None:
+                            pending.append((
+                                nested,
+                                key in ("message", "reply_to_message"),
+                                key in ("sender", "from", "from_user", "user"),
+                            ))
+                else:
+                    if is_message and not result["reply_id"]:
+                        mid = getattr(item, "message_id", None) or getattr(item, "messageId", None)
+                        if not mid:
+                            mid = getattr(item, "id", None)
+                        if mid and not isinstance(mid, (dict, list)):
+                            result["reply_id"] = str(mid)
+                    if not result["sender_id"]:
+                        sid = (
+                            getattr(item, "sender_id", None) or
+                            getattr(item, "user_id", None) or
+                            getattr(item, "from_id", None)
+                        )
+                        if not sid and is_sender:
+                            sid = getattr(item, "id", None)
+                        if sid and not isinstance(sid, (dict, list)):
+                            result["sender_id"] = str(sid)
+                    for attr in ("sender", "from_user", "user", "message", "reply_to_message"):
+                        try:
+                            nested = getattr(item, attr, None)
+                            if nested is not None:
+                                pending.append((
+                                    nested,
+                                    attr in ("message", "reply_to_message"),
+                                    attr in ("sender", "from_user", "user"),
+                                ))
+                        except Exception:
+                            pass
     except Exception as e:
         print(f"⚠️ RT_PARSE: {e}", flush=True)
     if not result["reply_id"]:
@@ -1631,8 +1741,15 @@ def load_cache():
         try:
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+                    if not isinstance(cache, dict):
+                        raise ValueError("ساختار فایل کش باید شیء JSON باشد")
                     print(f"✅ CACHE: {path}", flush=True)
-                    return json.load(f)
+                    return {
+                        str(chat_id): messages
+                        for chat_id, messages in cache.items()
+                        if isinstance(messages, dict)
+                    }
         except Exception as e:
             print(f"⚠️ load_cache {path}: {e}", flush=True)
     return {}
@@ -1685,11 +1802,18 @@ def load_data():
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
+                    if not isinstance(loaded, dict):
+                        raise ValueError("ساختار فایل داده باید شیء JSON باشد")
                     for lk in ["started_users", "known_groups", "talkative_disabled"]:
                         if lk in loaded: loaded[lk] = ensure_list(loaded[lk])
                     for k, v in defaults.items():
-                        if k not in loaded: loaded[k] = v
-                    if "settings" in loaded:
+                        if k not in loaded or not isinstance(loaded[k], type(v)):
+                            loaded[k] = json.loads(json.dumps(v, ensure_ascii=False))
+                    if not isinstance(loaded.get("settings"), dict):
+                        loaded["settings"] = json.loads(
+                            json.dumps(defaults["settings"], ensure_ascii=False)
+                        )
+                    else:
                         for sk, sv in defaults["settings"].items():
                             if sk not in loaded["settings"]:
                                 loaded["settings"][sk] = sv
@@ -1874,7 +1998,7 @@ def is_group_locked(chat_id):
     if chat_id in temp_locks_now:
         et = temp_locks_now[chat_id]
         if time.time() < et:
-            return True, f"قفل موقت (پایان: {datetime.fromtimestamp(et).strftime('%H:%M')})"
+            return True, f"قفل موقت (پایان: {datetime.fromtimestamp(et, tz=IRAN_TZ).strftime('%H:%M')})"
         else:
             del temp_locks_now[chat_id]
             save_data(bot_data)
@@ -1899,20 +2023,33 @@ def get_warn_delete_after(chat_id):
 
 async def add_warning(chat_id, user_id, reason="", user_info=None):
     try:
-        if chat_id not in bot_data["warnings"]: bot_data["warnings"][chat_id] = {}
-        if user_id not in bot_data["warnings"][chat_id]: bot_data["warnings"][chat_id][user_id] = 0
-        bot_data["warnings"][chat_id][user_id] += 1
-        count = bot_data["warnings"][chat_id][user_id]
-        limit = bot_data["warn_limit"].get(chat_id, 3)
+        user_id = str(user_id)
+        if not isinstance(bot_data.get("warnings"), dict):
+            bot_data["warnings"] = {}
+        if not isinstance(bot_data["warnings"].get(chat_id), dict):
+            bot_data["warnings"][chat_id] = {}
+        try:
+            previous_count = int(bot_data["warnings"][chat_id].get(user_id, 0))
+        except (TypeError, ValueError):
+            previous_count = 0
+        count = max(0, previous_count) + 1
+        bot_data["warnings"][chat_id][user_id] = count
+
+        if not isinstance(bot_data.get("warn_limit"), dict):
+            bot_data["warn_limit"] = {}
+        try:
+            limit = max(1, int(bot_data["warn_limit"].get(chat_id, 3)))
+        except (TypeError, ValueError):
+            limit = 3
         save_data(bot_data, force=True)
         if user_info is None: user_info = await get_user_info(chat_id, user_id)
         display = format_user_display(user_info, user_id)
         del_after = get_warn_delete_after(chat_id)
         wt = (
-            f"⚠️ **اخطار!** ⚠️\n\n"
-            f"👤 **کاربر:** {display}\n"
+            f"⚠️ **اخطار ثبت شد** ⚠️\n\n"
+            f"👤 **کاربر:** **{display}**\n"
             f"📌 **دلیل:** {reason if reason else 'تخلف از قوانین'}\n"
-            f"📊 **اخطار فعلی:** [{count}/{limit}]\n\n"
+            f"📊 **تعداد اخطارها:** **{count} از {limit}**\n\n"
             f"━━━━━━━━━━━━━━━━━━━\n⚡ **FLUXBOT**"
         )
         try:
@@ -1925,10 +2062,17 @@ async def add_warning(chat_id, user_id, reason="", user_info=None):
         if count >= limit and settings.get("auto_ban", True):
             try:
                 await bot.ban_member_chat(chat_id, user_id)
-                if chat_id not in bot_data["banned_users"]: bot_data["banned_users"][chat_id] = {}
+                if not isinstance(bot_data.get("banned_users"), dict):
+                    bot_data["banned_users"] = {}
+                if not isinstance(bot_data["banned_users"].get(chat_id), dict):
+                    bot_data["banned_users"][chat_id] = {}
                 bot_data["banned_users"][chat_id][user_id] = time.time()
                 save_data(bot_data, force=True)
-                bm = f"🚫 **کاربر اخراج شد!**\n\n👤 {display}\n📊 تعداد اخطار: [{count}/{limit}]"
+                bm = (
+                    f"🚫 **کاربر اخراج شد**\n\n"
+                    f"👤 **کاربر:** **{display}**\n"
+                    f"📊 **تعداد اخطارها:** **{count} از {limit}**"
+                )
                 try:
                     result = await bot.send_message(chat_id=chat_id, text=bm)
                     if del_after > 0:
@@ -1990,6 +2134,65 @@ def build_keypad():
     except Exception as e:
         print(f"❌ KEYPAD: {e}", flush=True)
         return None
+
+
+def extract_button_id(message):
+    """Read keypad IDs across common Rubika message/aux-data shapes."""
+    values = []
+    for attr in ("button_id", "buttonId", "callback_data", "callbackData"):
+        try:
+            value = getattr(message, attr, None)
+            if value is not None:
+                values.append(value)
+        except Exception:
+            pass
+
+    for attr in ("aux_data", "auxData"):
+        try:
+            value = getattr(message, attr, None)
+            if value is not None:
+                values.append(value)
+        except Exception:
+            pass
+
+    # aux_data is normally a mapping, but some clients serialize it as JSON.
+    expanded = []
+    for value in values:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                pass
+        expanded.append(value)
+
+    id_keys = ("button_id", "buttonId", "callback_data", "callbackData", "id")
+    nested_keys = ("data", "button", "payload", "aux_data", "auxData")
+    seen = set()
+    while expanded:
+        value = expanded.pop(0)
+        marker = id(value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if isinstance(value, dict):
+            for key in id_keys:
+                candidate = value.get(key)
+                if isinstance(candidate, (str, int)) and str(candidate).strip():
+                    return str(candidate).strip()
+            for key in nested_keys:
+                nested = value.get(key)
+                if nested is not None:
+                    if isinstance(nested, str):
+                        try:
+                            nested = json.loads(nested)
+                        except (TypeError, ValueError):
+                            pass
+                    expanded.append(nested)
+        elif isinstance(value, (str, int)):
+            candidate = str(value).strip()
+            if candidate.startswith("btn_"):
+                return candidate
+    return None
 
 
 def get_channel_text():
@@ -2411,10 +2614,7 @@ async def handle_message(bot, message):
                     return
             processed_messages[pm_key] = raw_text
 
-        aux = getattr(message, 'aux_data', None) or getattr(message, 'auxData', None)
-        button_id = None
-        if aux and isinstance(aux, dict):
-            button_id = aux.get('button_id') or aux.get('id')
+        button_id = extract_button_id(message)
 
         if sender_id: register_user(sender_id)
         if is_group_chat(chat_id): register_group(chat_id)
@@ -2719,13 +2919,21 @@ async def handle_message(bot, message):
             if sender_id not in welcomed:
                 cn = await get_chat_name(chat_id)
                 welcome_msg = get_welcome_text(chat_id, cn, disp)
+                welcome_sent = False
                 try:
-                    await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=welcome_msg)
+                    result = await bot.send_message(
+                        chat_id=chat_id,
+                        reply_to_message_id=message.message_id,
+                        text=welcome_msg,
+                    )
+                    welcome_sent = api_result_ok(result)
                 except Exception as e:
                     print(f"⚠️ welcome: {e}", flush=True)
-                if chat_id not in bot_data["welcomed_users"]: bot_data["welcomed_users"][chat_id] = {}
-                bot_data["welcomed_users"][chat_id][sender_id] = True
-                save_data(bot_data)
+                if welcome_sent:
+                    if chat_id not in bot_data["welcomed_users"]:
+                        bot_data["welcomed_users"][chat_id] = {}
+                    bot_data["welcomed_users"][chat_id][sender_id] = True
+                    save_data(bot_data)
 
         today = get_local_now().strftime("%Y-%m-%d")
         if chat_id not in bot_data["message_counts"]: bot_data["message_counts"][chat_id] = {}
@@ -3088,8 +3296,9 @@ async def handle_message(bot, message):
             if chat_id in games and games[chat_id].get("status") in ("waiting", "playing"):
                 await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text="⚠️ **یه بازی دیگه در جریانه!**")
                 return
-            coin_flip_games[chat_id] = {"player": str(sender_id), "started_at": time.time()}
-            try: asyncio.create_task(game_timeout_check(chat_id, "coinflip"))
+            started_at = time.time()
+            coin_flip_games[chat_id] = {"player": str(sender_id), "started_at": started_at}
+            try: asyncio.create_task(game_timeout_check(chat_id, "coinflip", started_at))
             except: pass
             await bot.send_message(chat_id=chat_id, text=(
                 f"🪙 **بازی شیر یا خط شروع شد!**\n\n"
@@ -3354,7 +3563,7 @@ async def handle_message(bot, message):
             bot_data["group_locks"][chat_id] = False
             save_data(bot_data, force=True)
             await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=(
-                f"🔒 **قفل موقت: {h} ساعت**\n🕐 پایان: {datetime.fromtimestamp(et).strftime('%H:%M - %Y/%m/%d')}"))
+                f"🔒 **قفل موقت: {h} ساعت**\n🕐 پایان: {datetime.fromtimestamp(et, tz=IRAN_TZ).strftime('%H:%M - %Y/%m/%d')}"))
             return
 
         sm = re.match(r"^قفل\s+(\d{1,2}):(\d{2})\s+(?:تا\s+)?(\d{1,2}):(\d{2})$", clean_text)
@@ -3560,7 +3769,7 @@ async def handle_message(bot, message):
             if chat_id not in bot_data["mute_list"]: bot_data["mute_list"][chat_id] = {}
             bot_data["mute_list"][chat_id][tgt] = et
             save_data(bot_data, force=True)
-            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🔇 سکوت {mins} دقیقه (پایان: {datetime.fromtimestamp(et).strftime('%H:%M')})")
+            await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id, text=f"🔇 سکوت {mins} دقیقه (پایان: {datetime.fromtimestamp(et, tz=IRAN_TZ).strftime('%H:%M')})")
             return
 
         wsm = re.match(r"^تنظیم\s+اخطار\s+(\d+)$", clean_text)
