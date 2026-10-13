@@ -145,7 +145,7 @@ _DEFAULT_SETTINGS = {
 _DEFAULT_DATA_SHAPES = {
     "settings": {}, "started_users": [], "known_groups": [], "known_users": {},
     "group_locks": {}, "temp_locks": {}, "scheduled_locks": {},
-    "special_users": {}, "warnings": {}, "warn_limit": {}, "warn_delete_after": {},
+    "special_users": {}, "lock_exemptions": {}, "warnings": {}, "warn_limit": {}, "warn_delete_after": {},
     "banned_users": {}, "mute_list": {}, "filtered_words": {}, "rules": {},
     "custom_welcome": {}, "welcomed_users": {}, "talkative_disabled": [],
     "anti_repeat": {}, "slow_mode": {}, "games": {}, "invite_codes": {},
@@ -912,7 +912,7 @@ async def send_user_mention_message(chat_id, user_id, text, reply_to_message_id=
             chat_id=chat_id, text=text, reply_to_message_id=reply_to_message_id
         )
 
-    label = "کاربر"
+    label = "مشاهده پروفایل"
     rendered_text = (
         text[:marker_index] + label +
         text[marker_index + len(USER_MENTION_TOKEN):]
@@ -1747,7 +1747,7 @@ def build_font_message(text):
     if re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text):
         styles.append(font_persian_contextual(text))
 
-    if _has_latin(text):
+    if _has_latin(text) or re.search(r'[0-9]', text):
         styles.append(font_bold(text))
         styles.append(font_italic(text))
         styles.append(font_bold_italic(text))
@@ -2088,6 +2088,99 @@ def contains_forbidden_bio(text):
         if _normalized_word and _normalized_word in _normalized_text:
             return _original_word
     return None
+
+
+
+def get_any_lock_violation(message, text, chat_id, edited=False):
+    """Detect any active content lock, including the edit lock when processing an edit."""
+    text = str(text or "")
+    if edited and settings.get("edit", False):
+        return "ویرایش پیام", "EDIT"
+    if settings.get("id", False) and contains_id(text):
+        return "ارسال آیدی", "ID"
+    if settings.get("link", False) and contains_link(text):
+        return "لینک", "LINK"
+    if settings.get("hyperlink", False) and contains_hyperlink(text):
+        return "هایپرلینک", "HYPERLINK"
+    if settings.get("profanity", True) and contains_profanity(text):
+        return "فحش", "PROFANITY"
+    if settings.get("filter", True):
+        _filtered = ensure_list_dict(bot_data, "filtered_words", chat_id)
+        if contains_filtered_word(text, _filtered):
+            return "کلمه فیلترشده", "FILTER"
+    if settings.get("forward", False) and is_forwarded(message):
+        return "فوروارد", "FORWARD"
+    if settings.get("gif", False) and is_gif(message):
+        return "گیف", "GIF"
+    if settings.get("emoji", False) and contains_emoji(text):
+        return "ارسال ایموجی", "EMOJI"
+    if settings.get("sticker", False) and is_sticker(message):
+        return "ارسال استیکر", "STICKER"
+    if settings.get("number", False) and is_only_number(text):
+        return "ارسال عدد", "NUMBER"
+    if settings.get("english", False) and is_english_text(text):
+        return "ارسال متن انگلیسی", "ENGLISH"
+    if settings.get("forbidden_words", False) and contains_forbidden_bio(text):
+        return "کلمات غیرمجاز", "BIO"
+    return None
+
+
+def has_lock_exemption(chat_id, user_id):
+    try:
+        _all = bot_data.get("lock_exemptions", {})
+        if not isinstance(_all, dict):
+            return False
+        _group = _all.get(str(chat_id), {})
+        if not isinstance(_group, dict):
+            return False
+        _entry = _group.get(str(user_id))
+        return _entry is True or (isinstance(_entry, dict) and "remaining" in _entry)
+    except Exception:
+        return False
+
+
+def consume_lock_exemption(chat_id, user_id):
+    """Consume one allowed lock violation; this never grants management privileges."""
+    try:
+        chat_id = str(chat_id)
+        user_id = str(user_id)
+        all_exemptions = bot_data.get("lock_exemptions", {})
+        if not isinstance(all_exemptions, dict):
+            bot_data["lock_exemptions"] = {}
+            return False
+        group_exemptions = all_exemptions.get(chat_id, {})
+        if not isinstance(group_exemptions, dict):
+            return False
+        entry = group_exemptions.get(user_id)
+        if entry is None or entry is False:
+            return False
+        if entry is True:
+            return True
+        if not isinstance(entry, dict):
+            group_exemptions.pop(user_id, None)
+            save_data(bot_data, force=True)
+            return False
+        remaining = entry.get("remaining")
+        if remaining is None:
+            return True
+        try:
+            remaining = int(remaining)
+        except (TypeError, ValueError):
+            group_exemptions.pop(user_id, None)
+            save_data(bot_data, force=True)
+            return False
+        if remaining <= 0:
+            group_exemptions.pop(user_id, None)
+            if not group_exemptions:
+                all_exemptions.pop(chat_id, None)
+            save_data(bot_data, force=True)
+            return False
+        entry["remaining"] = remaining - 1
+        save_data(bot_data, force=True)
+        return True
+    except Exception as _err:
+        print(f"⚠️ consume_lock_exemption: {_err}", flush=True)
+        return False
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -2459,6 +2552,8 @@ def get_help_text():
         "├ ⚙️ `تنظیم اخطار [عدد]`\n"
         "├ ⏱️ `حذف پیام اخطار [ثانیه]`\n"
         "├ ⭐ `ویژه` / ❌ `حذف ویژه`\n"
+        "├ 🛡️ `معاف` / `معاف 10` (ریپلای)\n"
+        "├ 🛡️ `حذف معاف` (ریپلای)\n"
         "├ 🚫 `فیلتر [کلمه]`\n"
         "├ 📋 `لیست فیلتر`\n"
         "├ 📝 `تنظیم قوانین [متن]`\n"
@@ -2768,8 +2863,19 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
         ui = await get_user_info(chat_id, sender_id)
         role = ui.get("role", "عضو")
         is_owner_group = role == "مالک"
+        is_owner_id = str(sender_id) == str(OWNER_ID)
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
-        can_manage = is_owner_group or is_special
+        can_manage = is_owner_id or is_owner_group or is_special
+        if can_manage:
+            return
+
+        _lock_exempt_this_edit = False
+        if has_lock_exemption(chat_id, sender_id):
+            _edit_filter_text = get_message_filter_text(message, new_text)
+            _edit_any_lock_violation = get_any_lock_violation(message, _edit_filter_text, chat_id, edited=True)
+            _lock_exempt_this_edit = bool(
+                _edit_any_lock_violation and consume_lock_exemption(chat_id, sender_id)
+            )
 
         async def _delete_edit(reason, log_tag=None):
             try:
@@ -2784,8 +2890,8 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
             if log_tag:
                 print(f"🗑️ [{log_tag}] پیام ویرایش‌شده پاک شد | {chat_id}", flush=True)
 
-        # قفل ویرایش باید پیش از معافیت مدیران بررسی شود؛ مطابق رفتار قبلی.
-        if settings.get("edit", False):
+        # قفل ویرایش برای کاربران عادی اعمال می‌شود؛ سهمیهٔ معافیت می‌تواند این تخلف را مجاز کند.
+        if settings.get("edit", False) and not _lock_exempt_this_edit:
             await _delete_edit("ویرایش پیام", "EDIT")
             return
 
@@ -2800,7 +2906,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
             match_two_word_cmd(_edit_clean_text, _lock_word, FILTER_ON, FILTER_OFF) is not None
             for _lock_word in _edit_filter_control_words
         )
-        if not _edit_is_filter_control:
+        if not _edit_is_filter_control and not _lock_exempt_this_edit:
             _edit_filter_text = get_message_filter_text(message, new_text)
             _edit_lock_violation = get_content_lock_violation(message, _edit_filter_text)
             if _edit_lock_violation:
@@ -2839,6 +2945,9 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             except Exception:
                 pass
+            return
+
+        if _lock_exempt_this_edit:
             return
 
         if settings.get("profanity", True) and contains_profanity(new_text):
@@ -3121,7 +3230,7 @@ async def handle_message(bot, message):
         disp = format_user_display(ui, sender_id)
         is_owner_group = (role == "مالک")
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
-        can_manage = is_owner_group or is_special
+        can_manage = is_owner_check or is_owner_group or is_special
 
         # When the bot is disabled, do not answer anyone in groups. Only an
         # authorized owner/special user can wake it up with the exact command "فعال".
@@ -3145,8 +3254,15 @@ async def handle_message(bot, message):
             match_two_word_cmd(clean_text, _lock_word, FILTER_ON, FILTER_OFF) is not None
             for _lock_word in _filter_control_words
         )
-        if not _is_filter_control_command:
-            _lock_filter_text = get_message_filter_text(message, raw_text)
+        _lock_exempt_this_message = False
+        _lock_filter_text = get_message_filter_text(message, raw_text)
+        if not can_manage and not _is_filter_control_command and has_lock_exemption(chat_id, sender_id):
+            _any_lock_violation = get_any_lock_violation(message, _lock_filter_text, chat_id)
+            if _any_lock_violation and consume_lock_exemption(chat_id, sender_id):
+                _lock_exempt_this_message = True
+                print(f"🛡️ [LOCK-EXEMPT] تخلف مجاز شمرده شد | {chat_id} | {sender_id}", flush=True)
+
+        if not can_manage and not _is_filter_control_command and not _lock_exempt_this_message:
             _content_lock_violation = get_content_lock_violation(message, _lock_filter_text)
             if _content_lock_violation:
                 _lock_reason, _lock_tag = _content_lock_violation
@@ -3167,7 +3283,7 @@ async def handle_message(bot, message):
 
         now = time.time()
         chat_mutes = bot_data.get("mute_list", {}).get(chat_id, {})
-        if sender_id in chat_mutes:
+        if not can_manage and sender_id in chat_mutes:
             if now < chat_mutes[sender_id]:
                 try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 except Exception as e:
@@ -3200,9 +3316,8 @@ async def handle_message(bot, message):
             if await handle_spam_check(chat_id, sender_id, msg_id, ui):
                 return
 
-        if can_manage and not _is_filter_control_command:
-            # Apply the new content locks to managers too, without changing
-            # the existing moderation order for ordinary members.
+        if not can_manage and not _is_filter_control_command and not _lock_exempt_this_message:
+            # Fallback checks for content locks on ordinary users; exemptions skip this pass.
             if settings.get("emoji", False) and contains_emoji(raw_text):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -3245,7 +3360,7 @@ async def handle_message(bot, message):
                 return
 
         # ═══════ فیلترهای محتوا — اینجا ID اول از همه ═══════
-        if bot_is_active and not can_manage:
+        if bot_is_active and not can_manage and not _lock_exempt_this_message:
             # 🆔 آیدی — اول چک می‌شه
             if settings.get("id", False) and contains_id(raw_text):
                 try:
@@ -3895,6 +4010,70 @@ async def handle_message(bot, message):
                     await bot.send_message(chat_id=chat_id, reply_to_message_id=message.message_id,
                                            text="⚠️ خطا در دریافت مقام.")
                 except: pass
+            return
+
+        _exempt_match = re.fullmatch(r"معاف(?:\s+([0-9\u0660-\u0669\u06f0-\u06f9]+))?", clean_text)
+        if _exempt_match:
+            if not can_manage: return
+            tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF": return
+            if not tgt:
+                await bot.send_message(chat_id=chat_id, text="⚠️ برای معاف‌کردن، روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
+                return
+            amount_text = _exempt_match.group(1)
+            limit = None
+            if amount_text is not None:
+                _digits = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+                try:
+                    limit = int(amount_text.translate(_digits))
+                except (TypeError, ValueError):
+                    limit = 0
+                if limit < 1:
+                    await bot.send_message(chat_id=chat_id, text="⚠️ تعداد معافیت باید حداقل ۱ باشد.", reply_to_message_id=message.message_id)
+                    return
+            if not isinstance(bot_data.get("lock_exemptions"), dict):
+                bot_data["lock_exemptions"] = {}
+            if not isinstance(bot_data["lock_exemptions"].get(chat_id), dict):
+                bot_data["lock_exemptions"][chat_id] = {}
+            bot_data["lock_exemptions"][chat_id][str(tgt)] = {
+                "remaining": limit,
+                "granted_by": str(sender_id),
+                "created_at": time.time(),
+            }
+            save_data(bot_data, force=True)
+            if limit is None:
+                _exempt_text = f"✅ {USER_MENTION_TOKEN} از قفل‌های محتوایی به‌صورت نامحدود معاف شد.\n\nاین کاربر ویژه نشده و فقط از قفل‌های محتوا معاف است."
+            else:
+                _exempt_text = f"✅ {USER_MENTION_TOKEN} از قفل‌های محتوایی برای {limit} تخلف معاف شد.\n\nپس از مصرف سهمیه، قفل‌ها دوباره مثل کاربر عادی اعمال می‌شوند."
+            await send_user_mention_message(
+                chat_id, tgt, _exempt_text,
+                reply_to_message_id=message.message_id, bot_client=bot,
+            )
+            return
+
+        if is_command(clean_text, "حذف معاف", "لغو معاف"):
+            if not can_manage: return
+            tgt = await find_reply_target(message, chat_id)
+            if tgt == "BOT_SELF": return
+            if not tgt:
+                await bot.send_message(chat_id=chat_id, text="⚠️ برای حذف معافیت، روی پیام کاربر ریپلای کنید.", reply_to_message_id=message.message_id)
+                return
+            _all_exemptions = bot_data.get("lock_exemptions", {})
+            _group_exemptions = _all_exemptions.get(chat_id, {}) if isinstance(_all_exemptions, dict) else {}
+            if isinstance(_group_exemptions, dict) and str(tgt) in _group_exemptions:
+                del _group_exemptions[str(tgt)]
+                if not _group_exemptions:
+                    _all_exemptions.pop(chat_id, None)
+                save_data(bot_data, force=True)
+                await send_user_mention_message(
+                    chat_id, tgt, f"✅ معافیت محتوایی {USER_MENTION_TOKEN} حذف شد.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
+            else:
+                await send_user_mention_message(
+                    chat_id, tgt, f"ℹ️ {USER_MENTION_TOKEN} معافیت محتوایی ندارد.",
+                    reply_to_message_id=message.message_id, bot_client=bot,
+                )
             return
 
         if is_command(clean_text, "حذف ویژه", "لغو ویژه", "حذف ادمین"):
