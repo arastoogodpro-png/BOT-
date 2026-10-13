@@ -1775,29 +1775,82 @@ def contains_emoji(text):
            (0x1F000 <= cp <= 0x1F2FF) or \
            (0x2190 <= cp <= 0x21FF) or \
            (0x2B00 <= cp <= 0x2BFF) or \
-           (0x1F1E6 <= cp <= 0x1F1FF):
+           (0x1F1E6 <= cp <= 0x1F1FF) or \
+           cp in (0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139,
+                  0x3030, 0x303D, 0x3297, 0x3299, 0x20E3, 0xFE0F):
             return True
     return False
 
 
 def is_sticker(message):
-    """تشخیص استیکر"""
-    for attr in ['is_sticker', 'sticker', 'sticker_message']:
+    """تشخیص استیکر از ویژگی‌های پیام و دادهٔ خام روبیکا"""
+    if message is None:
+        return False
+
+    # Rubka Message normally exposes `.sticker`; other variants may expose
+    # a sticker flag or a sticker-specific payload directly.
+    for attr in (
+        'sticker', 'is_sticker', 'sticker_message', 'sticker_id', 'stickerId',
+        'sticker_file_id', 'sticker_file', 'sticker_data', 'isSticker',
+    ):
         try:
-            if getattr(message, attr, None): return True
-        except: pass
-    try:
-        mt = str(getattr(message, 'type', '') or getattr(message, 'message_type', '')).lower()
-        return 'sticker' in mt
-    except: return False
+            value = getattr(message, attr, None)
+            if value:
+                return True
+        except Exception:
+            pass
+
+    for attr in (
+        'type', 'message_type', 'content_type', 'media_type', 'file_type',
+        'attachment_type', 'kind',
+    ):
+        try:
+            value = getattr(message, attr, None)
+            if value and 'sticker' in str(value).lower():
+                return True
+        except Exception:
+            pass
+
+    def _payload_has_sticker(value, depth=0):
+        if depth > 5 or value is None:
+            return False
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_norm = str(key).replace('_', '').replace('-', '').lower()
+                if key_norm in (
+                    'sticker', 'issticker', 'stickermessage', 'stickerid',
+                    'stickerfileid', 'stickerdata',
+                ) and item not in (None, False, '', {}, []):
+                    return True
+                if key_norm in (
+                    'type', 'messagetype', 'contenttype', 'mediatype',
+                    'filetype', 'attachmenttype', 'kind',
+                ) and 'sticker' in str(item).lower():
+                    return True
+                if isinstance(item, (dict, list, tuple)) and _payload_has_sticker(item, depth + 1):
+                    return True
+            return False
+        if isinstance(value, (list, tuple)):
+            return any(_payload_has_sticker(item, depth + 1) for item in value)
+        return False
+
+    for attr in ('raw_data', 'rawData', 'data', 'aux_data', 'auxData', 'message', 'media', 'attachment'):
+        try:
+            if _payload_has_sticker(getattr(message, attr, None)):
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def is_only_number(text):
-    """تشخیص اینکه پیام فقط عدد هست"""
-    if not text: return False
-    t = str(text).strip().replace(' ', '').replace('\u200c', '').replace('\u200d', '')
-    if not t: return False
-    return t.isdigit()
+    """تشخیص وجود عدد در هر جای پیام؛ ارقام انگلیسی، فارسی و عربی"""
+    if not text:
+        return False
+    # isdecimal recognizes 0-9, Persian digits (۰۱۲۳) and Arabic-Indic digits (٠١٢٣).
+    # Unlike the previous implementation, the digits do not need to form the whole message.
+    return any(char.isdecimal() for char in str(text))
 
 
 def is_english_text(text):
@@ -2567,7 +2620,35 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
         if settings.get("edit", False):
             await _delete_edit("ویرایش پیام", "EDIT")
             return
+
+        _edit_filter_control_words = (
+            "لینک", "آیدی", "اسپم", "هایپرلینک", "فحش", "فوروارد", "هدایت",
+            "گیف", "ایموجی", "استیکر", "عدد", "انگلیسی", "کلمات غیرمجاز",
+            "کلمات غیر مجاز", "کلمه غیرمجاز", "کلمه غیر مجاز", "بیو", "بایو",
+            "بیوچک", "بایوچک", "بیو چک", "بایو چک", "ویرایش",
+        )
+        _edit_clean_text = clean_message(new_text)
+        _edit_is_filter_control = can_manage and any(
+            match_two_word_cmd(_edit_clean_text, _lock_word, FILTER_ON, FILTER_OFF) is not None
+            for _lock_word in _edit_filter_control_words
+        )
         if can_manage:
+            if not _edit_is_filter_control:
+                if settings.get("emoji", False) and contains_emoji(new_text):
+                    await _delete_edit("ارسال ایموجی (ویرایش)", "EMOJI")
+                    return
+                if settings.get("sticker", False) and is_sticker(message):
+                    await _delete_edit("ارسال استیکر (ویرایش)", "STICKER")
+                    return
+                if settings.get("number", False) and is_only_number(new_text):
+                    await _delete_edit("ارسال عدد (ویرایش)", "NUMBER")
+                    return
+                if settings.get("english", False) and is_english_text(new_text):
+                    await _delete_edit("ارسال متن انگلیسی (ویرایش)", "ENGLISH")
+                    return
+                if settings.get("forbidden_words", False) and contains_forbidden_bio(new_text):
+                    await _delete_edit("کلمات غیرمجاز (ویرایش)", "BIO")
+                    return
             return
 
         locked, _ = is_group_locked(chat_id)
@@ -2701,6 +2782,11 @@ async def handle_message(bot, message):
         is_owner_check = (str(sender_id) == OWNER_ID)
 
         print(f"📩 {chat_id} | {sender_id} | {raw_text!r}", flush=True)
+
+        # While disabled, silence all group activity before any feature (including
+        # broadcast handling) can reply. The group-role check below authorizes activation.
+        if is_group_chat(chat_id) and not bot_is_active and clean_text not in ("فعال", "فاعل"):
+            return
 
         # ============ 📢 ارسال پیام همگانی ============
         broadcast_match = re.match(r"^ارسال\s+پیام\s+همگانی\s+گروه\s+([\s\S]+)$", raw_text.strip())
@@ -2863,6 +2949,28 @@ async def handle_message(bot, message):
         is_special = bot_data.get("special_users", {}).get(chat_id, {}).get(sender_id, False)
         can_manage = is_owner_group or is_special
 
+        # When the bot is disabled, do not answer anyone in groups. Only an
+        # authorized owner/special user can wake it up with the exact command "فعال".
+        if not bot_is_active:
+            if can_manage and is_command(clean_text, "فعال", "فاعل"):
+                bot_is_active = True
+                bot_data["bot_is_active"] = True
+                save_data(bot_data, force=True)
+                await bot.send_message(chat_id=chat_id, text="✅ فعال شد.", reply_to_message_id=message.message_id)
+            return
+
+        # Keep lock-control commands usable for owners/special users even when
+        # one of the content locks is enabled.
+        _filter_control_words = (
+            "لینک", "آیدی", "اسپم", "هایپرلینک", "فحش", "فوروارد", "هدایت",
+            "گیف", "ایموجی", "استیکر", "عدد", "انگلیسی", "کلمات غیرمجاز",
+            "کلمات غیر مجاز", "کلمه غیرمجاز", "کلمه غیر مجاز", "بیو", "بایو",
+            "بیوچک", "بایوچک", "بیو چک", "بایو چک", "ویرایش",
+        )
+        _is_filter_control_command = can_manage and any(
+            match_two_word_cmd(clean_text, _lock_word, FILTER_ON, FILTER_OFF) is not None
+            for _lock_word in _filter_control_words
+        )
         locked, _ = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
@@ -2903,6 +3011,50 @@ async def handle_message(bot, message):
 
         if settings["spam"] and not can_manage and is_valid_mid:
             if await handle_spam_check(chat_id, sender_id, msg_id, ui):
+                return
+
+        if can_manage and not _is_filter_control_command:
+            # Apply the new content locks to managers too, without changing
+            # the existing moderation order for ordinary members.
+            if settings.get("emoji", False) and contains_emoji(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال ایموجی", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete emoji failed: {e}", flush=True)
+                return
+            if settings.get("sticker", False) and is_sticker(message):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال استیکر", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete sticker failed: {e}", flush=True)
+                return
+            if settings.get("number", False) and is_only_number(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال عدد", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete number failed: {e}", flush=True)
+                return
+            if settings.get("english", False) and is_english_text(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "ارسال متن انگلیسی", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete english failed: {e}", flush=True)
+                return
+            if settings.get("forbidden_words", False) and contains_forbidden_bio(raw_text):
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, "کلمات غیرمجاز", user_info=ui)
+                except Exception as e:
+                    print(f"⚠️ delete bio failed: {e}", flush=True)
                 return
 
         # ═══════ فیلترهای محتوا — اینجا ID اول از همه ═══════
@@ -3787,7 +3939,7 @@ async def handle_message(bot, message):
             return
 
         if is_command(clean_text, "غیرفعال"):
-            if not is_owner_group: return
+            if not can_manage: return
             msg = "⛔ از قبل غیرفعال." if not bot_is_active else "🛑 غیرفعال شد."
             bot_is_active = False
             bot_data["bot_is_active"] = False
