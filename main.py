@@ -5,6 +5,7 @@ import time
 import asyncio
 import random
 import traceback
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from rubka import Robot, Message
 from rubka.keypad import ChatKeypadBuilder
@@ -1627,6 +1628,69 @@ def _map_unicode(text, upper_start, lower_start, digit_start=None):
     return ''.join(out)
 
 
+def _build_persian_presentation_forms():
+    forms = {}
+    for code_range in (range(0xFB50, 0xFE00), range(0xFE70, 0xFF00)):
+        for codepoint in code_range:
+            ch = chr(codepoint)
+            decomposition = unicodedata.decomposition(ch).split()
+            if len(decomposition) != 2:
+                continue
+            form_name, base_code = decomposition
+            if form_name not in ('<isolated>', '<final>', '<initial>', '<medial>'):
+                continue
+            try:
+                base = chr(int(base_code, 16))
+            except ValueError:
+                continue
+            forms.setdefault(base, {})[form_name[1:-1]] = ch
+    return forms
+
+
+_PERSIAN_PRESENTATION_FORMS = _build_persian_presentation_forms()
+
+
+def font_persian_contextual(text):
+    """Encode Persian/Arabic letters with their Unicode contextual presentation forms."""
+    original_chars = list(str(text or ""))
+    chars = original_chars[:]
+    for index, ch in enumerate(original_chars):
+        current_forms = _PERSIAN_PRESENTATION_FORMS.get(ch)
+        if not current_forms:
+            continue
+
+        previous_forms = (
+            _PERSIAN_PRESENTATION_FORMS.get(original_chars[index - 1], {})
+            if index > 0 and original_chars[index - 1] not in ('\u200c', '\u200d') else {}
+        )
+        next_forms = (
+            _PERSIAN_PRESENTATION_FORMS.get(original_chars[index + 1], {})
+            if index + 1 < len(original_chars) and original_chars[index + 1] not in ('\u200c', '\u200d') else {}
+        )
+
+        joins_previous = (
+            bool(previous_forms) and
+            ('initial' in previous_forms or 'medial' in previous_forms) and
+            ('final' in current_forms or 'medial' in current_forms)
+        )
+        joins_next = (
+            bool(next_forms) and
+            ('initial' in current_forms or 'medial' in current_forms) and
+            ('final' in next_forms or 'medial' in next_forms)
+        )
+
+        if joins_previous and joins_next:
+            form_name = 'medial'
+        elif joins_previous:
+            form_name = 'final'
+        elif joins_next:
+            form_name = 'initial'
+        else:
+            form_name = 'isolated'
+        chars[index] = current_forms.get(form_name, current_forms.get('isolated', ch))
+    return ''.join(chars)
+
+
 def font_bold(t): return _map_unicode(t, 0x1D400, 0x1D41A, 0x1D7CE)
 def font_italic(t):
     r = _map_unicode(t, 0x1D434, 0x1D44E)
@@ -1679,6 +1743,9 @@ def build_font_message(text):
         text = text[:12] + "…"
 
     styles = []
+
+    if re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text):
+        styles.append(font_persian_contextual(text))
 
     if _has_latin(text):
         styles.append(font_bold(text))
@@ -1783,26 +1850,62 @@ def contains_emoji(text):
 
 
 def is_sticker(message):
-    """تشخیص استیکر از ویژگی‌های پیام و دادهٔ خام روبیکا"""
+    """تشخیص استیکر از ویژگی‌های Message، aux_data و دادهٔ خام روبیکا"""
     if message is None:
         return False
 
-    # Rubka Message normally exposes `.sticker`; other variants may expose
-    # a sticker flag or a sticker-specific payload directly.
+    def _truthy_sticker_value(value):
+        if value is None or value is False or value == '' or value == 0:
+            return False
+        if isinstance(value, (dict, list, tuple)) and not value:
+            return False
+        return True
+
+    def _payload_has_sticker(value, depth=0, seen=None):
+        if depth > 8 or value is None:
+            return False
+        if seen is None:
+            seen = set()
+        if not isinstance(value, (str, int, float, bool, bytes)):
+            marker = id(value)
+            if marker in seen:
+                return False
+            seen.add(marker)
+
+        if isinstance(value, str):
+            return 'sticker' in value.lower()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_norm = str(key).replace('_', '').replace('-', '').lower()
+                if 'sticker' in key_norm and _truthy_sticker_value(item):
+                    return True
+                if key_norm in (
+                    'type', 'messagetype', 'contenttype', 'mediatype',
+                    'filetype', 'attachmenttype', 'kind', 'mimetype',
+                    'mime', 'mediatype', 'filemime',
+                ) and 'sticker' in str(item).lower():
+                    return True
+                if isinstance(item, (dict, list, tuple)) and _payload_has_sticker(item, depth + 1, seen):
+                    return True
+            return False
+        if isinstance(value, (list, tuple)):
+            return any(_payload_has_sticker(item, depth + 1, seen) for item in value)
+        return False
+
     for attr in (
         'sticker', 'is_sticker', 'sticker_message', 'sticker_id', 'stickerId',
         'sticker_file_id', 'sticker_file', 'sticker_data', 'isSticker',
     ):
         try:
             value = getattr(message, attr, None)
-            if value:
+            if _truthy_sticker_value(value):
                 return True
         except Exception:
             pass
 
     for attr in (
         'type', 'message_type', 'content_type', 'media_type', 'file_type',
-        'attachment_type', 'kind',
+        'attachment_type', 'kind', 'mime_type', 'mime',
     ):
         try:
             value = getattr(message, attr, None)
@@ -1811,52 +1914,117 @@ def is_sticker(message):
         except Exception:
             pass
 
-    def _payload_has_sticker(value, depth=0):
-        if depth > 5 or value is None:
-            return False
-        if isinstance(value, dict):
-            for key, item in value.items():
-                key_norm = str(key).replace('_', '').replace('-', '').lower()
-                if key_norm in (
-                    'sticker', 'issticker', 'stickermessage', 'stickerid',
-                    'stickerfileid', 'stickerdata',
-                ) and item not in (None, False, '', {}, []):
-                    return True
-                if key_norm in (
-                    'type', 'messagetype', 'contenttype', 'mediatype',
-                    'filetype', 'attachmenttype', 'kind',
-                ) and 'sticker' in str(item).lower():
-                    return True
-                if isinstance(item, (dict, list, tuple)) and _payload_has_sticker(item, depth + 1):
-                    return True
-            return False
-        if isinstance(value, (list, tuple)):
-            return any(_payload_has_sticker(item, depth + 1) for item in value)
-        return False
-
-    for attr in ('raw_data', 'rawData', 'data', 'aux_data', 'auxData', 'message', 'media', 'attachment'):
+    for attr in (
+        'raw_data', 'rawData', 'data', 'aux_data', 'auxData', 'message',
+        'media', 'attachment', 'file', 'content',
+    ):
         try:
-            if _payload_has_sticker(getattr(message, attr, None)):
+            value = getattr(message, attr, None)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except Exception:
+                    pass
+            if _payload_has_sticker(value):
                 return True
         except Exception:
             pass
 
     return False
 
-
 def is_only_number(text):
     """تشخیص وجود عدد در هر جای پیام؛ ارقام انگلیسی، فارسی و عربی"""
     if not text:
         return False
-    # isdecimal recognizes 0-9, Persian digits (۰۱۲۳) and Arabic-Indic digits (٠١٢٣).
-    # Unlike the previous implementation, the digits do not need to form the whole message.
-    return any(char.isdecimal() for char in str(text))
+    return bool(re.search(r'[0-9\u0660-\u0669\u06F0-\u06F9]', str(text)))
 
 
 def is_english_text(text):
     """تشخیص اینکه پیام شامل حروف انگلیسی هست"""
     if not text: return False
     return bool(re.search(r'[A-Za-z]', str(text)))
+
+
+def get_message_filter_text(message, fallback_text=""):
+    """متن پیام و کپشن را از متن اصلی و payload های مختلف Rubika جمع می‌کند."""
+    found = []
+    seen = set()
+    text_keys = ('text', 'caption', 'text_caption', 'caption_text', 'message_text')
+    container_keys = (
+        'raw_data', 'rawData', 'data', 'message', 'new_message', 'content',
+        'aux_data', 'auxData', 'media', 'attachment', 'file',
+    )
+
+    def add_text(value):
+        if value is None:
+            return
+        if isinstance(value, str):
+            value = value.strip()
+            if value and value not in found:
+                found.append(value)
+        elif isinstance(value, (int, float)):
+            return
+        elif isinstance(value, dict):
+            visit(value, 1)
+
+    def visit(value, depth=0):
+        if value is None or depth > 6:
+            return
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except Exception:
+                return
+            if isinstance(decoded, (dict, list, tuple)):
+                visit(decoded, depth + 1)
+            return
+        if isinstance(value, (dict, list, tuple)):
+            marker = id(value)
+            if marker in seen:
+                return
+            seen.add(marker)
+        if isinstance(value, dict):
+            for key in text_keys:
+                if key in value:
+                    add_text(value.get(key))
+            for key in container_keys:
+                if key in value:
+                    visit(value.get(key), depth + 1)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item, depth + 1)
+        else:
+            for key in text_keys:
+                try:
+                    add_text(getattr(value, key, None))
+                except Exception:
+                    pass
+            for key in container_keys:
+                try:
+                    nested = getattr(value, key, None)
+                    if nested is not None and not isinstance(nested, (str, int, float, bool)):
+                        visit(nested, depth + 1)
+                    elif isinstance(nested, str) and key in ('raw_data', 'rawData', 'data'):
+                        visit(nested, depth + 1)
+                except Exception:
+                    pass
+
+    add_text(fallback_text)
+    visit(message)
+    return '\n'.join(found)
+
+
+def get_content_lock_violation(message, text):
+    """در صورت قفل بودن، نوع تخلف محتوایی را برمی‌گرداند؛ در حالت باز چیزی برنمی‌گرداند."""
+    if settings.get('emoji', False) and contains_emoji(text):
+        return 'ارسال ایموجی', 'EMOJI'
+    if settings.get('sticker', False) and is_sticker(message):
+        return 'ارسال استیکر', 'STICKER'
+    if settings.get('number', False) and is_only_number(text):
+        return 'ارسال عدد', 'NUMBER'
+    if settings.get('english', False) and is_english_text(text):
+        return 'ارسال متن انگلیسی', 'ENGLISH'
+    return None
 
 
 FORBIDDEN_BIO_WORDS = [
@@ -2632,6 +2800,12 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
             match_two_word_cmd(_edit_clean_text, _lock_word, FILTER_ON, FILTER_OFF) is not None
             for _lock_word in _edit_filter_control_words
         )
+        if not _edit_is_filter_control:
+            _edit_filter_text = get_message_filter_text(message, new_text)
+            _edit_lock_violation = get_content_lock_violation(message, _edit_filter_text)
+            if _edit_lock_violation:
+                await _delete_edit(_edit_lock_violation[0] + " (ویرایش)", _edit_lock_violation[1])
+                return
         if can_manage:
             if not _edit_is_filter_control:
                 if settings.get("emoji", False) and contains_emoji(new_text):
@@ -2971,6 +3145,19 @@ async def handle_message(bot, message):
             match_two_word_cmd(clean_text, _lock_word, FILTER_ON, FILTER_OFF) is not None
             for _lock_word in _filter_control_words
         )
+        if not _is_filter_control_command:
+            _lock_filter_text = get_message_filter_text(message, raw_text)
+            _content_lock_violation = get_content_lock_violation(message, _lock_filter_text)
+            if _content_lock_violation:
+                _lock_reason, _lock_tag = _content_lock_violation
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                    if settings.get("warning"):
+                        await add_warning(chat_id, sender_id, _lock_reason, user_info=ui)
+                    print(f"🗑️ [{_lock_tag}] پاک شد | {chat_id}", flush=True)
+                except Exception as e:
+                    print(f"⚠️ delete {_lock_tag.lower()} failed: {e}", flush=True)
+                return
         locked, _ = is_group_locked(chat_id)
         if locked and not can_manage:
             try: await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
