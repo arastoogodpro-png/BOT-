@@ -6,6 +6,7 @@ import asyncio
 import random
 import traceback
 import unicodedata
+import threading
 from datetime import datetime, timedelta, timezone
 from rubka import Robot, Message
 from rubka.keypad import ChatKeypadBuilder
@@ -97,6 +98,14 @@ def _write_json_to_paths(paths, value):
     return False
 
 
+_CACHE_FILE_LOCK = threading.RLock()
+
+
+def _write_cache_to_paths(value):
+    with _CACHE_FILE_LOCK:
+        return _write_json_to_paths(CACHE_PATHS, value)
+
+
 def save_data(data=None, force=False):
     try:
         _payload = data if isinstance(data, dict) else bot_data
@@ -111,10 +120,87 @@ def load_cache():
     return _value if isinstance(_value, dict) else {}
 
 
+_CACHE_SAVE_INTERVAL = 1.0
+_cache_save_timer = None
+_cache_save_task = None
+_cache_save_pending = False
+_cache_save_last_time = 0.0
+
+
+def _launch_deferred_cache_save():
+    global _cache_save_timer, _cache_save_task, _cache_save_pending, _cache_save_last_time
+    _cache_save_timer = None
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            _snapshot = json.loads(json.dumps(message_cache, ensure_ascii=False))
+            _write_cache_to_paths(_snapshot)
+            _cache_save_last_time = time.monotonic()
+        except Exception as _err:
+            print(f"⚠️ deferred cache snapshot: {_err}", flush=True)
+        return
+
+    if _cache_save_task is not None and not _cache_save_task.done():
+        _cache_save_pending = True
+        return
+
+    try:
+        _snapshot = json.loads(json.dumps(message_cache, ensure_ascii=False))
+    except Exception as _err:
+        print(f"⚠️ deferred cache snapshot: {_err}", flush=True)
+        return
+
+    async def _write_snapshot():
+        global _cache_save_timer, _cache_save_task, _cache_save_pending, _cache_save_last_time
+        try:
+            await asyncio.to_thread(_write_cache_to_paths, _snapshot)
+        except Exception as _err:
+            print(f"⚠️ deferred cache write: {_err}", flush=True)
+        finally:
+            _cache_save_last_time = time.monotonic()
+            _cache_save_task = None
+            if _cache_save_pending:
+                _cache_save_pending = False
+                try:
+                    _cache_save_timer = _loop.call_later(_CACHE_SAVE_INTERVAL, _launch_deferred_cache_save)
+                except Exception as _err:
+                    print(f"⚠️ deferred cache reschedule: {_err}", flush=True)
+
+    _cache_save_task = _loop.create_task(_write_snapshot())
+
+
 def save_cache(cache=None, force=False):
+    global _cache_save_timer, _cache_save_pending, _cache_save_last_time
     try:
         _payload = cache if isinstance(cache, dict) else message_cache
-        return _write_json_to_paths(CACHE_PATHS, _payload)
+        if force:
+            if _cache_save_timer is not None:
+                try:
+                    _cache_save_timer.cancel()
+                except Exception:
+                    pass
+                _cache_save_timer = None
+            _result = _write_cache_to_paths(_payload)
+            _cache_save_last_time = time.monotonic()
+            if _cache_save_task is not None and not _cache_save_task.done():
+                _cache_save_pending = True
+            return _result
+
+        try:
+            _loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _result = _write_cache_to_paths(_payload)
+            _cache_save_last_time = time.monotonic()
+            return _result
+
+        if _cache_save_task is not None and not _cache_save_task.done():
+            _cache_save_pending = True
+            return True
+        if _cache_save_timer is None:
+            _delay = max(0.05, _CACHE_SAVE_INTERVAL - (time.monotonic() - _cache_save_last_time))
+            _cache_save_timer = _loop.call_later(_delay, _launch_deferred_cache_save)
+        return True
     except Exception as _err:
         print(f"⚠️ save_cache: {_err}", flush=True)
         return False
@@ -216,6 +302,31 @@ def get_features_text():
         "⚠️ در صورت فعال بودن اخطار، تخلف‌ها با اخطار و اشارهٔ قابل‌کلیک به کاربر همراه می‌شوند.\n\n"
         "⚡ **FLUXBOT**"
     )
+
+
+
+def get_features_messages():
+    """گزارش قابلیت‌ها در ۷ پیام کوتاه و مناسب محدودیت طول روبیکا."""
+    return [
+        "📖 **قابلیت‌های FLUXBOT | ۱ از ۷**\n━━━━━━━━━━━━━━━━━━━\n🔒 **قفل‌های محتوا**\nبرای هر مورد از دستورهای «قفل» و «باز» استفاده کنید:\nلینک، آیدی، هایپرلینک، اسپم، فحش، فوروارد، گیف، ایموجی، استیکر، عدد، انگلیسی، کلمات غیرمجاز/بیوچک و ویرایش.\nنمونه: `لینک قفل` یا `لینک باز`.",
+        "🛡️ **قابلیت‌های FLUXBOT | ۲ از ۷**\n━━━━━━━━━━━━━━━━━━━\n**فیلتر و ضداسپم**\n• `فیلتر [کلمه]` و `حذف فیلتر [کلمه]`\n• `لیست فیلتر`\n• `تنظیم ضد تکرار [۲ تا ۱۰]`\n• `ضد تکرار بسته`\n• `تنظیم حالت آهسته [زمان]`\n• `حالت آهسته بسته`\n• تشخیص پیام‌های تکراری و محدودکردن ارسال سریع بر اساس تنظیمات گروه.",
+        "👮 **قابلیت‌های FLUXBOT | ۳ از ۷**\n━━━━━━━━━━━━━━━━━━━\n**مدیریت اعضا**\n• `بن` / `سیک` / `اخراج` (ریپلای)\n• `انبن` (ریپلای)\n• `سکوت [دقیقه]` (ریپلای)\n• `اخطار` و `حذف اخطار` (ریپلای)\n• `تنظیم اخطار [عدد]`\n• `حذف پیام اخطار [ثانیه]`\n• `پاکسازی [عدد]`\nدسترسی هر دستور طبق نقش و مجوز مدیریتی بررسی می‌شود.",
+        "🛡️ **قابلیت‌های FLUXBOT | ۴ از ۷**\n━━━━━━━━━━━━━━━━━━━\n**ویژه و معافیت محتوایی**\n• `ویژه` / `حذف ویژه` (ریپلای)\n• `معاف` برای معافیت از قفل‌های محتوا\n• `معاف 10` برای ۱۰ تخلف مجاز\n• `حذف معاف` برای پایان معافیت (ریپلای)\nمعافیت به‌خودی‌خود کاربر را ویژه نمی‌کند و مجوز مدیریتی نمی‌دهد.",
+        "👤 **قابلیت‌های FLUXBOT | ۵ از ۷**\n━━━━━━━━━━━━━━━━━━━\n**ابزارهای کاربران**\n• `پروفایل`، `مقام`، `رتبه`\n• `آمار گروه`، `ساعت`، `قوانین`\n• `تنظیم اصل [نام]` و `تنظیم لقب [نام]`\n• `فونت [متن]` برای ساخت سبک‌های نوشتاری\n• `راهنما` و `قابلیت‌های ربات`\n• دعوت: `زدن کد دعوت`، `کد دعوت من`، `امتیاز من` و `لیست برتر دعوت‌کنندگان`.",
+        "🎮 **قابلیت‌های FLUXBOT | ۶ از ۷**\n━━━━━━━━━━━━━━━━━━━\n**بازی و سرگرمی**\n• دوز: `دوز`، `دوز قرمز`، `دوز زرد`، `شرکت`، انتخاب ستون `1` تا `7` و `انصراف`\n• `بازی شیر یا خط`\n• `چالش` و `لیست بازی`\n• `جک`، `ضرب المثل`، `دانستی`، `فکت`، `پ ن پ`، `شعر`، `فال` و `شانس`\n• پاسخ‌های سرگرمی با `فلکس بات`.",
+        "⚙️ **قابلیت‌های FLUXBOT | ۷ از ۷**\n━━━━━━━━━━━━━━━━━━━\n**تنظیمات گروه و مالک**\n• `فعال` / `غیرفعال` و `قفلگروه` / `باز`\n• `قفل [ساعت]` و `قفل 23:00 تا 07:00` برای قفل موقت/زمان‌بندی‌شده\n• `حذف قفل زمان‌بندی` و `لیستقفلگروه`\n• `تنظیم قوانین [متن]`، `حذف قوانین`\n• خوش‌آمدگویی و خداحافظی قابل تنظیم\n• `تنظیم پیام خوش آمدگویی [متن]`، `نمایش پیام خوش آمدگویی`، `حذف پیام خوش آمدگویی`\n• `لیست قفل`، پنل پیوی و ارسال همگانی/فهرست گروه‌ها مخصوص مالک.\n\n⚡ **FLUXBOT**",
+    ]
+
+
+async def send_features_messages(chat_id, reply_to_message_id=None):
+    for _index, _part in enumerate(get_features_messages()):
+        try:
+            _kwargs = {"chat_id": chat_id, "text": _part}
+            if reply_to_message_id and _index == 0:
+                _kwargs["reply_to_message_id"] = reply_to_message_id
+            await bot.send_message(**_kwargs)
+        except Exception as _err:
+            print(f"❌ SEND FEATURE PART {_index + 1}: {_err}", flush=True)
 
 
 def get_games_list_text():
@@ -1282,8 +1393,6 @@ async def send_long_message(chat_id, text, reply_to_message_id=None):
                 kwargs["reply_to_message_id"] = reply_to_message_id
             result = await bot.send_message(**kwargs)
             if i == 0: first_result = result
-            if i < len(parts) - 1:
-                await asyncio.sleep(0.15)
         except Exception as e:
             print(f"❌ SEND PART {i}: {e}", flush=True)
     return first_result
@@ -1811,10 +1920,82 @@ def get_now_time():
 
 
 def is_forwarded(message):
-    for attr in ['forwarded_from', 'forward_from', 'forward', 'is_forwarded', 'fwd_from']:
+    """Detect forwarded messages in both Message attributes and nested Rubika payloads."""
+    if message is None:
+        return False
+
+    def _forward_value_is_set(value):
+        if value is None or value is False or value == 0:
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() not in ("", "false", "0", "none", "null", "no")
+        if isinstance(value, (dict, list, tuple, set)):
+            return bool(value)
+        return bool(value)
+
+    for _attr in (
+        "forwarded_from", "forward_from", "forward", "is_forwarded", "fwd_from",
+        "forwarded", "forwarded_message", "forward_info", "forwardInfo",
+        "forwarded_from_id", "forwardedFromId", "isForwarded",
+    ):
         try:
-            if getattr(message, attr, None): return True
-        except: pass
+            if _forward_value_is_set(getattr(message, _attr, None)):
+                return True
+        except Exception:
+            pass
+    for _attr in ("type", "message_type", "content_type", "event_type"):
+        try:
+            _type_value = str(getattr(message, _attr, "") or "").replace("_", "").replace("-", "").lower()
+            if "forward" in _type_value:
+                return True
+        except Exception:
+            pass
+
+    _seen = set()
+    _pending = []
+    for _attr in ("raw_data", "rawData", "data", "aux_data", "auxData", "message", "content"):
+        try:
+            _value = getattr(message, _attr, None)
+            if _value is not None:
+                if isinstance(_value, str):
+                    try:
+                        _value = json.loads(_value)
+                    except Exception:
+                        _value = None
+                if _value is not None:
+                    _pending.append((_value, 0))
+        except Exception:
+            pass
+
+    while _pending:
+        _value, _depth = _pending.pop()
+        if _value is None or _depth > 7:
+            continue
+        if isinstance(_value, (dict, list, tuple)):
+            _marker = id(_value)
+            if _marker in _seen:
+                continue
+            _seen.add(_marker)
+        if isinstance(_value, dict):
+            for _key, _item in _value.items():
+                _key_norm = str(_key).replace("_", "").replace("-", "").lower()
+                if "forward" in _key_norm and _forward_value_is_set(_item):
+                    return True
+                if _key_norm in ("type", "messagetype", "contenttype", "eventtype", "kind"):
+                    _type = str(_item or "").replace("_", "").replace("-", "").lower()
+                    if "forward" in _type:
+                        return True
+                if isinstance(_item, str) and _key_norm in ("rawdata", "auxdata", "data", "message"):
+                    try:
+                        _decoded = json.loads(_item)
+                    except Exception:
+                        _decoded = None
+                    if isinstance(_decoded, (dict, list, tuple)):
+                        _pending.append((_decoded, _depth + 1))
+                elif isinstance(_item, (dict, list, tuple)):
+                    _pending.append((_item, _depth + 1))
+        elif isinstance(_value, (list, tuple)):
+            _pending.extend((_item, _depth + 1) for _item in _value if isinstance(_item, (dict, list, tuple)))
     return False
 
 
@@ -2014,6 +2195,81 @@ def get_message_filter_text(message, fallback_text=""):
     return '\n'.join(found)
 
 
+_URL_PATTERN = re.compile(
+    r"(?i)(?:\b(?:https?|ftp)://[^\s<>\"'\]]+|\bwww\.[^\s<>\"'\]]+|"
+    r"(?<![\w@.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+    r"(?::[0-9]{1,5})?(?:/[^\s<>\"'\]]*)?)"
+)
+
+
+def contains_link(text):
+    """Recognize explicit URLs and bare domains without mistaking @usernames for links."""
+    if not text:
+        return False
+    return bool(_URL_PATTERN.search(str(text)))
+
+
+def contains_hyperlink(text, message=None):
+    """Detect text-markup links and link entities hidden in Rubika message metadata."""
+    _text = str(text or "")
+    if re.search(r"\[[^\]]{1,300}\]\s*\(\s*(?:https?://|ftp://|www\.|[a-z0-9.-]+\.[a-z]{2,})[^)]*\)", _text, re.IGNORECASE):
+        return True
+    if re.search(r"<a\b[^>]*\bhref\s*=", _text, re.IGNORECASE):
+        return True
+    if message is None:
+        return False
+
+    _roots = []
+    for _attr in ("metadata", "meta_data", "metaData", "entities", "text_entities", "textEntities", "aux_data", "auxData", "raw_data", "rawData", "data"):
+        try:
+            _value = getattr(message, _attr, None)
+            if _value is not None:
+                _roots.append((_value, _attr.lower() in ("metadata", "meta_data", "metadata", "entities", "text_entities", "textentities")))
+        except Exception:
+            pass
+    if isinstance(message, dict):
+        for _key in ("metadata", "meta_data", "metaData", "entities", "text_entities", "textEntities", "aux_data", "auxData", "raw_data", "rawData", "data"):
+            if _key in message:
+                _roots.append((message[_key], _key.lower() in ("metadata", "meta_data", "metadata", "entities", "text_entities", "textentities")))
+
+    _seen = set()
+    _pending = [(_value, 0, _in_metadata) for _value, _in_metadata in _roots]
+    _link_types = {"link", "hyperlink", "textlink", "texturl", "url", "urlentity", "linkentity", "texturllink"}
+    while _pending:
+        _value, _depth, _in_metadata = _pending.pop()
+        if _value is None or _depth > 7:
+            continue
+        if isinstance(_value, str):
+            try:
+                _decoded = json.loads(_value)
+            except Exception:
+                continue
+            if isinstance(_decoded, (dict, list, tuple)):
+                _pending.append((_decoded, _depth + 1, _in_metadata))
+            continue
+        if isinstance(_value, (dict, list, tuple)):
+            _marker = id(_value)
+            if _marker in _seen:
+                continue
+            _seen.add(_marker)
+        if isinstance(_value, dict):
+            for _key, _item in _value.items():
+                _key_norm = str(_key).replace("_", "").replace("-", "").lower()
+                _child_meta = _in_metadata or any(_tag in _key_norm for _tag in ("metadata", "metadatapart", "metadatapart", "entity", "textlink", "texturl", "hyperlink", "linkentity"))
+                if _in_metadata and _key_norm in ("type", "parttype", "entitytype", "kind", "messagetype"):
+                    _type = str(_item or "").replace("_", "").replace("-", "").replace(" ", "").lower()
+                    if _type in _link_types:
+                        return True
+                if _in_metadata and any(_tag in _key_norm for _tag in ("hyperlink", "texturl", "textlink", "linkurl", "urlentity")):
+                    if _item not in (None, False, "", 0, "false", "False"):
+                        return True
+                if isinstance(_item, (dict, list, tuple, str)):
+                    _pending.append((_item, _depth + 1, _child_meta))
+        elif isinstance(_value, (list, tuple)):
+            _pending.extend((_item, _depth + 1, _in_metadata) for _item in _value)
+    return False
+
+
 def get_content_lock_violation(message, text):
     """در صورت قفل بودن، نوع تخلف محتوایی را برمی‌گرداند؛ در حالت باز چیزی برنمی‌گرداند."""
     if settings.get('emoji', False) and contains_emoji(text):
@@ -2100,7 +2356,7 @@ def get_any_lock_violation(message, text, chat_id, edited=False):
         return "ارسال آیدی", "ID"
     if settings.get("link", False) and contains_link(text):
         return "لینک", "LINK"
-    if settings.get("hyperlink", False) and contains_hyperlink(text):
+    if settings.get("hyperlink", False) and contains_hyperlink(text, message):
         return "هایپرلینک", "HYPERLINK"
     if settings.get("profanity", True) and contains_profanity(text):
         return "فحش", "PROFANITY"
@@ -2420,7 +2676,7 @@ def extract_button_id(message):
         except Exception:
             pass
 
-    for attr in ("aux_data", "auxData"):
+    for attr in ("aux_data", "auxData", "raw_data", "rawData", "data", "callback_query", "callbackQuery"):
         try:
             value = getattr(message, attr, None)
             if value is not None:
@@ -2439,7 +2695,7 @@ def extract_button_id(message):
         expanded.append(value)
 
     id_keys = ("button_id", "buttonId", "callback_data", "callbackData", "id")
-    nested_keys = ("data", "button", "payload", "aux_data", "auxData")
+    nested_keys = ("data", "button", "payload", "aux_data", "auxData", "callback_query", "callbackQuery", "button_data", "buttonData", "action")
     seen = set()
     while expanded:
         value = expanded.pop(0)
@@ -2450,7 +2706,7 @@ def extract_button_id(message):
         if isinstance(value, dict):
             for key in id_keys:
                 candidate = value.get(key)
-                if isinstance(candidate, (str, int)) and str(candidate).strip():
+                if isinstance(candidate, (str, int)) and str(candidate).strip().startswith("btn_"):
                     return str(candidate).strip()
             for key in nested_keys:
                 nested = value.get(key)
@@ -2577,14 +2833,23 @@ async def get_groups_text():
         return f"🏠 **گروه‌های فعال:** **0**\n\n⚡ **FLUXBOT**"
     live = []
     dead = []
-    for gid in groups:
-        is_alive, err = await validate_group(gid)
+    _semaphore = asyncio.Semaphore(4)
+
+    async def _check_one(_gid):
+        async with _semaphore:
+            try:
+                _is_alive, _err = await validate_group(_gid)
+                return _gid, _is_alive, _err
+            except Exception as _err:
+                return _gid, True, str(_err)
+
+    _results = await asyncio.gather(*(_check_one(_gid) for _gid in groups))
+    for gid, is_alive, err in _results:
         if is_alive:
             live.append(gid)
         else:
             dead.append(gid)
             print(f"🗑️ [groups_btn] حذف گروه مرده: {gid} | {err}", flush=True)
-        await asyncio.sleep(0.15)
     if dead:
         bot_data["known_groups"] = live
         save_data(bot_data, force=True)
@@ -2823,7 +3088,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
                     await add_warning(chat_id, sender_id, "لینک (ویرایش)", user_info=ui)
             except: pass
             return
-        if settings.get("hyperlink") and contains_hyperlink(new_text):
+        if settings.get("hyperlink") and contains_hyperlink(new_text, message):
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                 if settings.get("warning"):
@@ -2961,7 +3226,7 @@ async def process_edited_message(message, chat_id, sender_id, raw_text, new_text
         if settings.get("link", False) and contains_link(new_text):
             await _delete_edit("لینک (ویرایش)")
             return
-        if settings.get("hyperlink", False) and contains_hyperlink(new_text):
+        if settings.get("hyperlink", False) and contains_hyperlink(new_text, message):
             await _delete_edit("هایپرلینک (ویرایش)")
             return
         if settings.get("id", False) and contains_id(new_text):
@@ -3047,7 +3312,7 @@ async def handle_message(bot, message):
         if sender_id: register_user(sender_id)
         if is_group_chat(chat_id): register_group(chat_id)
 
-        if chat_id and is_valid_mid and sender_id:
+        if is_group_chat(chat_id) and chat_id and is_valid_mid and sender_id:
             if chat_id not in message_cache: message_cache[chat_id] = {}
             message_cache[chat_id][msg_id] = sender_id
             try:
@@ -3180,8 +3445,9 @@ async def handle_message(bot, message):
                     f"⭐ **امتیاز من**\n━━━━━━━━━━━━━━━━━━━\n\n"
                     f"💎 **امتیاز:** `{pts}`\n👥 **دعوت‌شده:** `{invited}`\n🎫 **کد:** `{code}`\n\n⚡ **FLUXBOT**"))
                 return
-            if button_id == "btn_features" or raw_text == BTN_FEATURES or clean_text in ("قابلیت ها", "قابلیت‌ها", "قابلیت های ربات"):
-                await send_long_message(chat_id, get_features_text())
+            _feature_label = re.sub(r"[\W_]+", "", raw_text.replace("\u200c", "").replace("\u200d", "")).lower()
+            if button_id == "btn_features" or _feature_label in ("قابلیتهایربات", "قابلیتها", "قابلیت") or clean_text in ("قابلیت ها", "قابلیت‌ها", "قابلیت های ربات"):
+                await send_features_messages(chat_id)
                 return
             if button_id == "btn_top_inviters" or raw_text == BTN_TOP_INVITERS:
                 text = await get_top_inviters_text()
@@ -3263,7 +3529,11 @@ async def handle_message(bot, message):
                 print(f"🛡️ [LOCK-EXEMPT] تخلف مجاز شمرده شد | {chat_id} | {sender_id}", flush=True)
 
         if not can_manage and not _is_filter_control_command and not _lock_exempt_this_message:
+            # Preserve the existing priority for emoji/sticker/number/English locks;
+            # check the remaining locks immediately afterward to avoid slow-path delays.
             _content_lock_violation = get_content_lock_violation(message, _lock_filter_text)
+            if not _content_lock_violation:
+                _content_lock_violation = get_any_lock_violation(message, _lock_filter_text, chat_id)
             if _content_lock_violation:
                 _lock_reason, _lock_tag = _content_lock_violation
                 try:
@@ -3382,7 +3652,7 @@ async def handle_message(bot, message):
                     print(f"⚠️ delete link failed: {e}", flush=True)
                 return
             # 🔗 هایپرلینک
-            if settings.get("hyperlink", False) and contains_hyperlink(raw_text):
+            if settings.get("hyperlink", False) and contains_hyperlink(raw_text, message):
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
                     if settings.get("warning"):
@@ -3972,7 +4242,7 @@ async def handle_message(bot, message):
             return
 
         if is_command(clean_text, "قابلیت ها", "قابلیت‌ها", "قابلیت های ربات", "قابلیت"):
-            await send_long_message(chat_id, get_features_text(), reply_to_message_id=message.message_id)
+            await send_features_messages(chat_id, reply_to_message_id=message.message_id)
             return
 
         if is_command(clean_text, "ساعت", "زمان"):
